@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     # Business applications will be registered here in apps.* when added.
     "apps.companies",
     "apps.authentication",
+    "apps.reference_data",
 ]
 
 MIDDLEWARE = [
