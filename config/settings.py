@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     # Business applications will be registered here in apps.* when added.
     "apps.companies",
+    "apps.authentication",
 ]
 
 MIDDLEWARE = [
