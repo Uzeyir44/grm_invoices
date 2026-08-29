@@ -1,0 +1,25 @@
+${contract_num} - muqavile nomresi
+${contract_date} - muqavile tarixi
+${full_name} - Ad Soyad Ata adi
+${voen} - voen
+${contract_end_date} - son muqavile tarix
+${beneficiary_voen} - voen
+${beneficiary_account} - hesab nomresi
+${bank_name} - bankin adi
+${branch_code} - bankin kodu
+${bank_voen} - bankin voeni
+${m_account} - muxbir hesab
+${swift} - swift
+${address} - unvan
+${phone} - elaqe nomresi
+${invoice_num} - invoys nomresi
+${invoice_date} - invoys tarixi
+${payment_method} - odenis usulu
+${item_name} - malin/xidmetin adi
+${item_qty} - malin/xidmetin miqdari
+${item_price} - qiymeti
+${item_total} - mebleg
+${final_subtotal} - cemi
+${final_tax} - edv
+${final_grand_total} - yekun mebleg
+${notes} - elave qeyd

@@ -1,0 +1,74 @@
+Пожалуйста! Рад, что структура панели тебе подошла. Поскольку ты работаешь с базой данных grm_crm (или rock/rock в коде), вот пошаговое руководство по управлению базой данных через терминал Linux.
+
+1. Установка и настройка базы данных
+Предполагается, что ты используешь MySQL или MariaDB на сервере Linux (например, Ubuntu).
+
+Этап 1: Установка сервера
+Bash
+sudo apt update
+sudo apt install mariadb-server mariadb-client -y
+Этап 2: Первичная защита
+Запусти скрипт безопасности, чтобы установить пароль root и удалить анонимных пользователей:
+
+Bash
+sudo mysql_secure_installation
+Этап 3: Создание базы и пользователей
+Зайди в консоль MySQL:
+
+Bash
+sudo mysql -u root -p
+Внутри консоли выполни команды (замени password на свой):
+
+SQL
+-- Создание базы данных
+CREATE DATABASE grm_crm CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- Создание пользователя и выдача прав
+CREATE USER 'grm_user'@'localhost' IDENTIFIED BY 'your_secure_password';
+GRANT ALL PRIVILEGES ON grm_crm.* TO 'grm_user'@'localhost';
+FLUSH PRIVILEGES;
+EXIT;
+Этап 4: Импорт структуры таблиц
+Если у тебя есть готовый файл database.sql, загрузи его одной командой:
+
+Bash
+mysql -u grm_user -p grm_crm < /путь/к/файлу/database.sql
+2. Резервное копирование (Backup)
+Для безопасности бизнеса крайне важно делать бэкапы регулярно.
+
+Разовое создание копии:
+Bash
+mysqldump -u grm_user -p grm_crm > backup_$(date +%F).sql
+Эта команда создаст файл вида backup_2026-05-13.sql.
+
+Автоматизация (Cron):
+Чтобы бэкап делался автоматически каждую ночь в 03:00, добавь задачу в планировщик:
+
+Открой редактор: crontab -e
+
+Добавь строку в конец файла:
+
+Bash
+0 3 * * * mysqldump -u grm_user -pyour_password grm_crm > /home/user/backups/db_backup.sql
+Внимание: В crontab пароль пишется сразу после -p без пробела.
+
+3. Восстановление данных (Restore)
+Если что-то пошло не так и базу нужно вернуть в рабочее состояние из файла бэкапа:
+
+Способ 1: Полное восстановление
+Bash
+mysql -u grm_user -p grm_crm < backup_file.sql
+Способ 2: Если база была удалена
+Сначала нужно создать пустую базу, а потом импортировать данные:
+
+Bash
+mysql -u root -p -e "CREATE DATABASE grm_crm;"
+mysql -u root -p grm_crm < backup_file.sql
+Полезные советы для GRM Group:
+Права на папку uploads: Не забудь дать PHP права на запись в папку с документами: sudo chown -R www-data:www-data /var/www/html/uploads.
+
+Логи ошибок: Если база не подключается, проверь ошибки в терминале командой tail -f /var/log/mysql/error.log.
+
+Удаленный доступ: По умолчанию MySQL слушает только localhost. Если тебе нужно подключаться к базе извне, нужно поправить файл /etc/mysql/mariadb.conf.d/50-server.cnf (изменить bind-address на 0.0.0.0), но это не рекомендуется из соображений безопасности. Лучше использовать SSH-туннель.
+
+Теперь твоя система полностью защищена и готова к работе! Если понадобится помощь с кодом sirketler.php или konsalting.php, пиши.

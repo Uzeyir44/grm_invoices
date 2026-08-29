@@ -1,0 +1,160 @@
+Вот полное руководство по переносу и развёртыванию вашей CRM-системы документов (GRM Group Co. Document Automation System) на новом сервере Ubuntu с нуля.
+
+📋 Общие технические параметры системы
+Перед началом работы зафиксируем окружение, в котором система будет стабильно работать:
+
+Операционная система: Ubuntu 22.04 LTS / 24.04 LTS (или Ubuntu 18.04/20.04)
+
+Веб-сервер: Apache2 или Nginx (в этой инструкции разберем стандартный Apache2)
+
+Веб-порты: Стандартный 80 (HTTP) и 443 (HTTPS, если настраивается SSL)
+
+СУБД: MySQL / MariaDB (Стандартный порт 3306)
+
+Язык разработки: PHP 8.1 / 8.2 / 8.3
+
+Менеджер пакетов PHP: Composer (версия 2.x)
+
+🛠 Шаг 1. Обновление системы и установка системных зависимостей
+Подключитесь к вашему новому серверу через SSH и выполните обновление базовых пакетов:
+
+Bash
+sudo apt update && sudo apt upgrade -y
+Установите необходимые утилиты автоматизации, архивации и компиляции:
+
+Bash
+sudo apt install -y curl git unzip zip software-properties-common
+🐘 Шаг 2. Установка PHP и модулей (Критически важно)
+Для работы библиотеки PhpWord, генерации документов и создания резервных копий ZIP, PHP требуются специфические расширения. Установим PHP и полный стек модулей:
+
+Bash
+# Добавляем репозиторий для актуальных версий PHP (если требуется)
+sudo add-apt-repository ppa:ondrej/php -y
+sudo apt update
+
+# Установка PHP и модулей
+sudo apt install -y php8.2 php8.2-cli php8.2-common php8.2-mysql php8.2-zip php8.2-gd php8.2-mbstring php8.2-curl php8.2-xml php8.2-bcmath php8.2-intl
+🌐 Шаг 3. Установка Веб-сервера Apache
+Установим веб-сервер, который будет обрабатывать запросы пользователей в браузере:
+
+Bash
+sudo apt install -y apache2 libapache2-mod-php8.2
+
+# Включаем модуль переопределения путей (Rewrite), если он понадобится для ссылок
+sudo a2enmod rewrite
+
+# Запускаем и добавляем Apache в автозагрузку
+sudo systemctl start apache2
+sudo systemctl enable apache2
+🗄 Шаг 4. Установка СУБД MySQL и подготовка Базы Данных
+Установим сервер баз данных:
+
+Bash
+sudo apt install -y mysql-server
+sudo systemctl start mysql
+sudo systemctl enable mysql
+Зайдите в консоль MySQL под администратором:
+
+Bash
+sudo mysql
+Внутри консоли MySQL выполните следующие команды (создаем базу данных grm_crm и пользователя):
+
+SQL
+CREATE DATABASE grm_crm CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- Создаем пользователя 'grm_user' с надежным паролем (замените 'Ваш_Сложный_Пароль' на свой)
+CREATE USER 'grm_user'@'localhost' IDENTIFIED BY 'Ваш_Сложный_Пароль';
+
+-- Даем права пользователю на базу данных
+GRANT ALL PRIVILEGES ON grm_crm.* TO 'grm_user'@'localhost';
+FLUSH PRIVILEGES;
+EXIT;
+📦 Шаг 5. Установка Composer и зависимостей проекта
+Composer управляет библиотеками в PHP (включая PHPOffice/PhpWord, которая собирает файлы .docx).
+
+Скачиваем и устанавливаем Composer глобально в систему:
+
+Bash
+curl -sS https://getcomposer.org/installer | php
+sudo mv composer.phar /usr/local/bin/composer
+Проверяем корректность установки:
+
+Bash
+composer --version
+📂 Шаг 6. Развертывание файлов CRM и настройка прав
+Перенесите файлы вашего проекта в веб-директорию сервера (обычно это /var/www/html/ или отдельная папка проекта). Предположим, проект лежит в /var/www/html/grm_crm.
+
+Перейдите в папку вашего проекта:
+
+Bash
+cd /var/www/html/grm_crm
+Установите библиотеки через Composer (он прочитает ваш файл composer.json и создаст папку vendor со всеми внутренними модулями):
+
+Bash
+composer install --no-dev --optimize-autoloader
+Выставление прав на директории (Важнейший шаг для генерации и бэкапов):
+Веб-сервер Apache на Ubuntu работает под пользователем www-data. Нам нужно дать ему права на запись в папки для генерации документов и бэкапов:
+
+Bash
+# Меняем владельца всех файлов проекта на веб-сервер
+sudo chown -R www-data:www-data /var/www/html/grm_crm
+
+# Выставляем стандартные права (755 для папок, 644 для файлов)
+sudo find /var/www/html/grm_crm -type d -exec chmod 755 {} \;
+sudo find /var/www/html/grm_crm -type f -exec chmod 644 {} \;
+
+# Убедимся, что папки динамических файлов открыты на запись полностью
+sudo chmod -R 775 /var/www/html/grm_crm/uploads
+sudo chmod -R 775 /var/www/html/grm_crm/templates
+Примечание: Если папки uploads или backups еще не созданы, скрипты PHP попробуют создать их автоматически благодаря правам на родительскую директорию.
+
+⚙️ Шаг 7. Корректировка конфигурационных файлов
+Файл db.php:
+Откройте файл подключения к базе данных на новом сервере и укажите новые данные, созданные на Шаге 4:
+
+PHP
+$db_host = 'localhost';
+$db_name = 'grm_crm';
+$db_user = 'grm_user';
+$db_pass = 'Ваш_Сложный_Пароль'; // Тот пароль, что вы указали в MySQL
+Развертывание дампа структуры БД:
+Если у вас есть старый бэкап базы данных (файл .sql), импортируйте его структуру и клиентов на новый сервер через терминал:
+
+Bash
+mysql -u grm_user -p grm_crm < /путь_к_вашему_файлу/database_backup.sql
+💻 Шаг 8. Настройка Виртуального хоста в Apache
+Чтобы сервер понимал, куда направлять пользователя при вводе IP или домена в строке браузера:
+
+Создайте файл конфигурации хоста:
+
+Bash
+sudo nano /etc/apache2/sites-available/grm_crm.conf
+Вставьте следующую конфигурацию (замените grm-crm.local на ваш домен или используйте IP-адрес сервера):
+
+Apache
+<VirtualHost *:80>
+    ServerAdmin admin@grm-group.co
+    ServerName grm-crm.local
+    DocumentRoot /var/www/html/grm_crm
+
+    <Directory /var/www/html/grm_crm>
+        Options Indexes FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    ErrorLog ${APACHE_LOG_DIR}/grm_crm_error.log
+    CustomLog ${APACHE_LOG_DIR}/grm_crm_access.log combined
+</VirtualHost>
+Активируйте созданный сайт и перезапустите веб-сервер:
+
+Bash
+sudo a2ensite grm_crm.conf
+sudo a2dissite 000-default.conf # Отключаем стандартную заглушку Ubuntu
+sudo systemctl restart apache2
+🚀 Проверка работы
+Откройте браузер и введите IP-адрес вашего нового сервера или привязанный домен:
+
+http://айпи_вашего_сервера/login.php
+
+Всё готово! Система полностью развернута, зависимости установлены, права распределены, и генерация документов с функционалом бэкапов будут работать в штатном режиме.
