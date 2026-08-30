@@ -23,7 +23,8 @@ design is listed under [Future modules](#future-modules).
 │   ├── reference_data/  # Shared/global lookup and reference tables
 │   ├── clients/         # Client management
 │   ├── document_templates/  # Document templates and their versions
-│   └── company_document_counters/  # Per-company document numbering counters
+│   ├── company_document_counters/  # Per-company document numbering counters
+│   └── generated_documents/  # Generated documents, versions, and line items
 ├── requirements/
 │   └── base.txt
 ├── .env               # Local environment variables (gitignored)
@@ -98,6 +99,9 @@ ClientBankAccount
 DocumentTemplate
 TemplateVersion
 CompanyDocumentCounter
+GeneratedDocument
+GeneratedDocumentVersion
+DocumentLineItem
 ```
 
 Shared/global tables:
@@ -401,15 +405,85 @@ Model: `CompanyDocumentCounter`.
   creation it is numbering, so a failure afterwards rolls the increment back
   too.
 
+## 7. Generated Documents
+
+App:
+
+```text
+apps/generated_documents/
+```
+
+Models: `GeneratedDocument`, `GeneratedDocumentVersion`, `DocumentLineItem`.
+
+```text
+GeneratedDocument
+       │
+       ├── GeneratedDocumentVersion
+       │
+       └── DocumentLineItem
+```
+
+- **`GeneratedDocument`** is the logical document identity — a "folder", not
+  its contents. It stores the document number, the `client`, the `company`,
+  and the current `status` (draft / generated / sent / void). What was
+  actually generated lives in `GeneratedDocumentVersion`; this table never
+  holds anything that could legitimately differ between versions.
+- Every generated document belongs to exactly one company (`PROTECT` — legal/
+  financial retention). It may reference a `Client` (`PROTECT` — deleting a
+  client must not touch its documents), the shared `DocumentType`, and the
+  `DocumentTemplate` that produced it.
+- `document_number` is unique per company (unique constraint on
+  `(company, document_number)`). `created_by` → `User` (`SET_NULL`). Soft
+  delete via `deleted_at`.
+- There are indexes on `(company, status)` and `(company, client)`.
+- **`GeneratedDocumentVersion`** is an immutable snapshot of a generated
+  document. Line items belong **here**, not to `GeneratedDocument` directly:
+  editing a document means creating a new version, never mutating an existing
+  one's contents.
+- `version_number` is unique per document. The version references the
+  `TemplateVersion` used to generate it (`PROTECT` — reconstruction depends
+  on this reference).
+- It snapshots the `Currency` (shared), `exchange_rate_used`, and
+  `vat_rate_used_percent`, capturing the values actually applied at
+  generation time.
+- `generation_snapshot` is a JSON field holding the full point-in-time
+  rendering input (company/client/document/template/template variables) that
+  must cover every value affecting rendered output. `generation_metadata`
+  holds genuinely incidental technical data only (engine version, render
+  duration).
+- Output files are recorded via `storage_path_docx` and `storage_path_pdf`.
+  `generated_by` → `User` (`SET_NULL`).
+- `GeneratedDocumentVersion.company` is a **copy** of
+  `generated_document.company`, existing purely to support composite FKs
+  proving the version's document and template version belong to the same
+  company (closing the gap where a Company-A document could reference a
+  Company-B template version).
+- **`DocumentLineItem`** belongs to a specific `GeneratedDocumentVersion`,
+  not to the document directly — this is what makes "Version 1: 10 hours,
+  Version 2: 20 hours" reconstructable. It is owned entirely by its version
+  (`CASCADE`).
+- Line items store `line_number` (unique within a version), `description`,
+  `quantity`, `unit`, `unit_price`, `discount_percent`, `vat_rate_percent`,
+  and the shared `Currency`, plus computed monetary totals (`subtotal`,
+  `vat_amount`, `total`).
+- `company` on the version and line item is the copied-company pattern used
+  throughout the client/template chain, to support composite FKs.
+- As in other apps, the composite FKs (`UNIQUE(id, company_id)` targets,
+  `(client_id, company_id)`, `(template_id, company_id)`,
+  `(template_version_id, company_id)`, and the user references) and the
+  INSERT-only immutability triggers on versions and line items require
+  PostgreSQL composite foreign keys and triggers that Django cannot express
+  natively; these are planned as raw-SQL migration additions.
+- One application-level rule (not DB-enforced): for version 1, a line item's
+  currency should match its parent version's currency — the column stays
+  flexible for future genuine multi-currency line items, but nothing should
+  exercise that yet.
+
 ## Future modules
 
 The following modules are **designed but not yet implemented** in Django at
 this point:
 
-- Generated documents
-- Generated document versions
-- Document line items
-- Generation snapshots
 - Audit logging
 - PostgreSQL RLS policies
 - PostgreSQL triggers for database-level integrity rules
@@ -425,13 +499,13 @@ reference_data / Currency, VatRate, ExchangeRate, AddressType, DocumentType, Ban
 clients / Client, ClientLegalEntity, ClientIndividual, ClientAddress, ClientContact, ClientBankAccount
 document_templates / DocumentTemplate, TemplateVersion
 company_document_counters / CompanyDocumentCounter
+generated_documents / GeneratedDocument, GeneratedDocumentVersion, DocumentLineItem
 ```
 
 ### Planned/future
 
 ```text
-generated documents, generated document versions, document line items
-generation snapshots, audit logging
+audit logging
 PostgreSQL RLS policies, PostgreSQL triggers for database-level integrity rules
 ```
 
