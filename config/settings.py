@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     "apps.document_templates",
     "apps.company_document_counters",
     "apps.generated_documents",
+    "apps.audit_logs",
 ]
 
 MIDDLEWARE = [
