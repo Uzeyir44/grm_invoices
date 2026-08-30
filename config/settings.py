@@ -8,13 +8,12 @@ when present) so configuration stays separate from the business code.
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+import environ
 
-# Build paths inside the project like this: BASE_DIR / "subdir".
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load environment variables from the project root (.env is gitignored).
-load_dotenv(BASE_DIR / ".env")
+env = environ.Env()
+environ.Env.read_env(BASE_DIR / ".env")
 
 
 def env(name, default=None):
@@ -55,6 +54,7 @@ INSTALLED_APPS = [
     "apps.company_document_counters",
     "apps.generated_documents",
     "apps.audit_logs",
+    "apps.database",
 ]
 
 MIDDLEWARE = [
@@ -94,11 +94,11 @@ ASGI_APPLICATION = "config.asgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": env("DB_NAME", "grm_crm"),
-        "USER": env("DB_USER", "grm_user"),
-        "PASSWORD": env("DB_PASSWORD", ""),
-        "HOST": env("DB_HOST", "localhost"),
-        "PORT": env("DB_PORT", "5432"),
+        "NAME": env("DB_NAME"),
+        "USER": env("DB_USER"),
+        "PASSWORD": env("DB_PASSWORD"),
+        "HOST": env("DB_HOST"),
+        "PORT": env("DB_PORT"),
     }
 }
 
