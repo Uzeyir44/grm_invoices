@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "apps.authentication",
     "apps.reference_data",
     "apps.clients",
+    "apps.document_templates",
 ]
 
 MIDDLEWARE = [
