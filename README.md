@@ -24,7 +24,8 @@ design is listed under [Future modules](#future-modules).
 │   ├── clients/         # Client management
 │   ├── document_templates/  # Document templates and their versions
 │   ├── company_document_counters/  # Per-company document numbering counters
-│   └── generated_documents/  # Generated documents, versions, and line items
+│   ├── generated_documents/  # Generated documents, versions, and line items
+│   └── audit_logs/  # Append-only audit trail
 ├── requirements/
 │   └── base.txt
 ├── .env               # Local environment variables (gitignored)
@@ -102,6 +103,7 @@ CompanyDocumentCounter
 GeneratedDocument
 GeneratedDocumentVersion
 DocumentLineItem
+AuditLog
 ```
 
 Shared/global tables:
@@ -479,12 +481,52 @@ GeneratedDocument
   flexible for future genuine multi-currency line items, but nothing should
   exercise that yet.
 
+## 8. Audit Logging
+
+App:
+
+```text
+apps/audit_logs/
+```
+
+Model: `AuditLog`.
+
+```text
+Company
+   │
+   └── AuditLog
+```
+
+- **`AuditLog`** is an **append-only** audit trail. It deliberately has no
+  `updated_at`/`deleted_at` — audit rows are immutable by design, not
+  soft-deletable business data.
+- Every audit log row belongs to exactly one company. `company` uses
+  `PROTECT`: audit history must outlive normal company lifecycle events.
+  (Companies are soft-deactivated via `status`/`deleted_at` and never
+  physically deleted, so this is a safety net that should never fire.)
+- `user` references `User` with `SET_NULL` — deleting a user must never
+  delete their audit trail.
+- A row records the `action` (e.g. `client.created`, `user.role_changed`),
+  the affected `entity_type` / `entity_id`, and optional `previous_values` /
+  `new_values` JSON capturing the before/after state.
+- Request context is stored as `ip_address`, `user_agent`, and an optional
+  `request_id` correlation ID (tying multiple audit rows to a single
+  operation).
+- `created_at` is the only timestamp.
+- There are indexes on `(company, -created_at)`, `(company, entity_type,
+  entity_id)`, `user`, and `request_id`.
+- Deferred to a raw-SQL migration: the composite FK
+  `(user_id, company_id) → users(id, company_id)` (so a Company-A audit log
+  can never be attributed to a Company-B user), a BEFORE UPDATE/DELETE
+  trigger raising an exception as a second line of defense independent of
+  role grants, and database-level `GRANT`/`REVOKE` so the application's
+  runtime role has `INSERT`/`SELECT` only on this table.
+
 ## Future modules
 
 The following modules are **designed but not yet implemented** in Django at
 this point:
 
-- Audit logging
 - PostgreSQL RLS policies
 - PostgreSQL triggers for database-level integrity rules
 
@@ -500,12 +542,12 @@ clients / Client, ClientLegalEntity, ClientIndividual, ClientAddress, ClientCont
 document_templates / DocumentTemplate, TemplateVersion
 company_document_counters / CompanyDocumentCounter
 generated_documents / GeneratedDocument, GeneratedDocumentVersion, DocumentLineItem
+audit_logs / AuditLog
 ```
 
 ### Planned/future
 
 ```text
-audit logging
 PostgreSQL RLS policies, PostgreSQL triggers for database-level integrity rules
 ```
 

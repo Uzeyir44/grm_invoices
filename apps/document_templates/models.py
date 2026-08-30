@@ -1,8 +1,8 @@
 from django.db import models
 
-from companies.models import Company
-from reference_data.models import DocumentType
-from authentication.models import User
+from apps.companies.models import Company
+from apps.reference_data.models import DocumentType
+from apps.authentication.models import User
 
 
 class DocumentTemplate(models.Model):
@@ -39,7 +39,7 @@ class DocumentTemplate(models.Model):
         indexes = [
             models.Index(
                 fields=["company", "document_type", "is_active"],
-                name="ix_templates_company_type_active",
+                name="ix_tpl_company_type_active",
             ),
         ]
 

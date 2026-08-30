@@ -1,6 +1,6 @@
 from django.db import connection, models
 
-from companies.models import Company
+from apps.companies.models import Company
 
 
 class CompanyDocumentCounter(models.Model):

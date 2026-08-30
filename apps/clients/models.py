@@ -1,8 +1,8 @@
 from django.db import models
 from django.db.models import Q
 
-from companies.models import Company
-from reference_data.models import AddressType, Bank, Currency
+from apps.companies.models import Company
+from apps.reference_data.models import AddressType, Bank, Currency
 
 
 class Client(models.Model):

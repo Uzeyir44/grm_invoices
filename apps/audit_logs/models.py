@@ -1,7 +1,7 @@
 from django.db import models
 
-from companies.models import Company
-from authentication.models import User
+from apps.companies.models import Company
+from apps.authentication.models import User
 
 
 class AuditLog(models.Model):

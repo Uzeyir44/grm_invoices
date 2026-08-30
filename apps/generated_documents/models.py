@@ -1,10 +1,10 @@
 from django.db import models
 
-from clients.models import Client
-from companies.models import Company
-from reference_data.models import Currency, DocumentType
-from document_templates.models import DocumentTemplate, TemplateVersion
-from authentication.models import User
+from apps.clients.models import Client
+from apps.companies.models import Company
+from apps.reference_data.models import Currency, DocumentType
+from apps.document_templates.models import DocumentTemplate, TemplateVersion
+from apps.authentication.models import User
 
 
 class GeneratedDocument(models.Model):
