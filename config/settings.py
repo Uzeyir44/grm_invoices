@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     "apps.reference_data",
     "apps.clients",
     "apps.document_templates",
+    "apps.company_document_counters",
 ]
 
 MIDDLEWARE = [

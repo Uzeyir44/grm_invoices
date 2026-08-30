@@ -21,7 +21,9 @@ design is listed under [Future modules](#future-modules).
 │   ├── companies/       # SaaS tenants, tenant settings and branding
 │   ├── authentication/  # Users, roles, permissions (own RBAC)
 │   ├── reference_data/  # Shared/global lookup and reference tables
-│   └── clients/         # Client management
+│   ├── clients/         # Client management
+│   ├── document_templates/  # Document templates and their versions
+│   └── company_document_counters/  # Per-company document numbering counters
 ├── requirements/
 │   └── base.txt
 ├── .env               # Local environment variables (gitignored)
@@ -93,6 +95,9 @@ Client
 ClientAddress
 ClientContact
 ClientBankAccount
+DocumentTemplate
+TemplateVersion
+CompanyDocumentCounter
 ```
 
 Shared/global tables:
@@ -321,14 +326,86 @@ Company
   in the subtype tables. These are planned as raw-SQL migration additions once
   all client tables exist.
 
+## 5. Document Templates
+
+App:
+
+```text
+apps/document_templates/
+```
+
+Models: `DocumentTemplate`, `TemplateVersion`.
+
+```text
+Company
+   │
+   └── DocumentTemplate
+        │
+        └── TemplateVersion
+```
+
+- Every document template belongs to exactly one company.
+- **`DocumentTemplate`** represents a company's template for a given document
+  type (consulting contract, invoice, etc.). It references the shared
+  `DocumentType` lookup table.
+- A template's actual file lives on disk/object storage; the
+  `DocumentTemplate` table stores only metadata (`name`, `is_active`,
+  timestamps, soft delete via `deleted_at`), with the storage location held in
+  `TemplateVersion.storage_path`.
+- There is an index optimized for `(company, document_type, is_active)`.
+- **`TemplateVersion`** is an immutable edition of a template's file. Old
+  versions are never deleted or edited, so `template` uses `PROTECT`
+  (`ON DELETE RESTRICT`) to preserve template history.
+- `version_number` is unique per template (unique constraint on
+  `(template, version_number)`).
+- A version records its `storage_path`, an optional `checksum`, and the user
+  who created it (`created_by` → `User`, `SET_NULL`).
+- `TemplateVersion.company` is a **copy** of `DocumentTemplate.company` (same
+  pattern as the client subtype tables): it exists to support a composite FK
+  `(template_id, company_id)` → `document_templates(id, company_id)` and an
+  immutability trigger proving the copy stays in sync.
+- `created_by` also needs a composite FK `(created_by_id, company_id)` →
+  `users(id, company_id)` so a template version can never be attributed to a
+  user from another company.
+- As in other apps, the composite FKs, the `UNIQUE(id, company_id)` target on
+  `DocumentTemplate`, and the INSERT-only invariant on `TemplateVersion`
+  require PostgreSQL composite foreign keys and triggers that Django cannot
+  express natively; these are planned as raw-SQL migration additions.
+
+## 6. Company Document Counters
+
+App:
+
+```text
+apps/company_document_counters/
+```
+
+Model: `CompanyDocumentCounter`.
+
+- **`CompanyDocumentCounter`** is a strict 1-to-1 extension of `Company`
+  (`OneToOneField`, `company_id` as the primary key) holding one row per
+  company for handing out document numbers.
+- It stores the last number handed out (`last_number`, `BigIntegerField`),
+  which is atomically incremented to produce the next document number.
+- It is deliberately **not** a per-company PostgreSQL `SEQUENCE` object,
+  since that does not scale cleanly to hundreds/thousands of tenants each
+  needing their own sequence.
+- Incrementing is a single `UPSERT ... RETURNING` statement, not a
+  read-then-write pair, so no interleaving window exists where two concurrent
+  calls could be handed the same number.
+- `on_delete=CASCADE`: this is pure operational state with no historical or
+  legal significance (unlike clients/documents/audit logs), so it follows the
+  same reasoning as `CompanySettings`/`CompanyBranding` rather than the
+  `PROTECT` used on business-critical company children.
+- The increment must happen inside the same transaction as the document
+  creation it is numbering, so a failure afterwards rolls the increment back
+  too.
+
 ## Future modules
 
 The following modules are **designed but not yet implemented** in Django at
 this point:
 
-- Document templates
-- Template versions/history
-- Company document counters
 - Generated documents
 - Generated document versions
 - Document line items
@@ -346,12 +423,13 @@ companies / Company, CompanySettings, CompanyBranding
 authentication / User, Role, Permission, UserRole, RolePermission
 reference_data / Currency, VatRate, ExchangeRate, AddressType, DocumentType, Bank
 clients / Client, ClientLegalEntity, ClientIndividual, ClientAddress, ClientContact, ClientBankAccount
+document_templates / DocumentTemplate, TemplateVersion
+company_document_counters / CompanyDocumentCounter
 ```
 
 ### Planned/future
 
 ```text
-document templates, template versions/history, company document counters
 generated documents, generated document versions, document line items
 generation snapshots, audit logging
 PostgreSQL RLS policies, PostgreSQL triggers for database-level integrity rules
