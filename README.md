@@ -23,8 +23,10 @@ under [Future modules](#future-modules).
 │   ├── companies/       # SaaS tenants, tenant settings and branding
 │   ├── authentication/  # Users, roles, permissions (own RBAC)
 │   │   ├── backends.py  # CompanyEmailBackend + active_user_rule
-│   │   ├── tests/       # Health + authentication test suites
-│   │   └── api/         # Feature API: urls, views, serializers, authentication
+│   │   ├── rbac.py      # Permission resolution (global vs company roles)
+│   │   ├── tenant.py    # Tenant-scoping helpers (isolation rules)
+│   │   ├── tests/       # Health, auth, authorization test suites
+│   │   └── api/         # Feature API: urls, views, serializers, permissions, authentication
 │   ├── reference_data/  # Shared/global lookup and reference tables
 │   ├── clients/         # Client management
 │   ├── document_templates/  # Document templates and their versions
@@ -345,6 +347,88 @@ PY
 Authentication behaviour — login success/failure, tenant isolation, token
 expiry and revocation, password security, and `/me/` — is covered in
 `apps/authentication/tests/` and runs with `python manage.py test`.
+
+---
+
+## Tenant isolation & authorization
+
+A reusable authorization foundation that every future feature API
+(clients, templates, documents, …) uses to enforce the core rule:
+
+> **An authenticated user can only access data belonging to their own
+> company.**
+
+### The rules
+
+```text
+Rule A  Never trust frontend company IDs for authorization.
+Rule B  request.user.company is the authoritative tenant context
+        (JWT → authenticated User → User.company).
+Rule C  Querysets are tenant-scoped: Model.objects.filter(company_id=...).
+Rule D  Single-object access is tenant-scoped too — a cross-tenant object
+        is indistinguishable from a missing one (HTTP 404).
+Rule E  Nested relationships must reach the tenant boundary through their
+        parent chain; a company cannot be crossed by guessing child IDs.
+```
+
+The authenticated user's company is the source of truth, so the frontend
+never needs to tell the API which company it belongs to. A request like
+`{"company_id": 999}` can never move data into (or out of) another tenant.
+
+### Reusable pieces
+
+- `apps/authentication/tenant.py` — tenant-scoping helpers:
+  - `tenant_queryset(Model, company)` → queryset restricted to the company
+    (Rule C)
+  - `get_tenant_object_or_404(Model, company, pk=...)` → fetches an object
+    that MUST belong to the company; raises `404` for cross-tenant or missing
+    objects, so another company's existence is never revealed (Rule D, IDOR)
+  - `belongs_to_company(company, obj)` → object-level company check
+- `apps/authentication/api/permissions.py` — reusable DRF permission classes:
+  - `IsCompanyMember` — authenticated user of an active/trial company
+  - `permission_required("clients.read")` — RBAC permission factory
+  - `IsSameCompanyObject` — object-level ownership check (object-level
+    fallback; preferred pattern is queryset scoping)
+- `apps/authentication/rbac.py` — RBAC resolution:
+  - `user_has_permission(user, code)`, `permission_codes_for(user)`
+  - resolves permissions through the user's assigned roles, respecting role
+    scope: global roles apply everywhere, company-specific roles apply only
+    within that company (a `trg_user_role_company_match` DB trigger already
+    blocks cross-company role assignment as a second line of defense)
+
+### Intended usage in feature views
+
+```python
+class ClientView(APIView):
+    permission_classes = [IsCompanyMember, permission_required("clients.read")]
+
+    def list(self, request):
+        # Rule C — queryset scoped to the tenant.
+        return Response(tenant_queryset(Client, request.user.company))
+
+    def get_object(self, pk):
+        # Rule D — 404 if the object is not in the caller's tenant.
+        return get_tenant_object_or_404(Client, request.user.company, pk=pk)
+
+    def create(self, request):
+        # Company is derived from the authenticated user, never from body data.
+        client = Client.objects.create(company=request.user.company, ...)
+```
+
+Cross-company reads, updates and deletes all resolve to `404` regardless of
+HTTP method, client-supplied `company_id`, or guessed object IDs. Creation
+always binds the object to `request.user.company`.
+
+### Tests
+
+`apps/authentication/tests/test_authorization.py` covers the foundation:
+queryset/object helper behaviour, read/create/update/delete isolation,
+client-supplied `company_id` being ignored, cross-company `404`s
+indistinguishable from missing objects, the RBAC permission factory, global
+vs company-scoped roles, cross-company role assignment being blocked, and the
+`IsCompanyMember` / `IsSameCompanyObject` permission classes. The small
+client views used there are **test-only fixtures** — a full Client API is a
+later step.
 
 ---
 
