@@ -14,12 +14,14 @@ design is listed under [Future modules](#future-modules).
 ├── manage.py          # Django management entry point
 ├── config/            # Project configuration (Django project package)
 │   ├── settings.py
-│   ├── urls.py
+│   ├── urls.py         # Main URLconf; mounts /admin/ and /api/
+│   ├── api_urls.py     # Top-level API router (health + feature routers)
 │   ├── asgi.py
 │   └── wsgi.py
 ├── apps/              # Business applications
 │   ├── companies/       # SaaS tenants, tenant settings and branding
 │   ├── authentication/  # Users, roles, permissions (own RBAC)
+│   │   └── api/         # Feature API: urls.py, views.py, serializers.py
 │   ├── reference_data/  # Shared/global lookup and reference tables
 │   ├── clients/         # Client management
 │   ├── document_templates/  # Document templates and their versions
@@ -63,6 +65,64 @@ design is listed under [Future modules](#future-modules).
 
 - Python 3.13+
 - PostgreSQL (create the database referenced by `DB_NAME` in `.env`)
+
+---
+
+## API layer
+
+A JSON API built on Django REST Framework (DRF, `rest_framework`). The API
+layer is under construction: only the foundation and the routing architecture
+exist so far. Authentication and business endpoints are intentionally
+**not** implemented yet.
+
+### Per-feature structure
+
+Every feature keeps its API code in an `api/` subpackage inside its own app:
+
+```text
+apps/authentication/
+├── ...
+└── api/
+    ├── __init__.py
+    ├── serializers.py
+    ├── views.py
+    └── urls.py
+```
+
+Future features (`apps/clients`, `apps/generated_documents`, …) will follow
+the same pattern and be mounted under `/api/<feature>/`.
+
+### URL scheme
+
+```text
+/api/health/          → liveness probe, returns {"status": "ok"}
+/api/authentication/  → authentication API router (empty until auth is built)
+/api/clients/         → planned
+/api/documents/       → planned
+```
+
+The top-level router lives in `config/api_urls.py` and is mounted from
+`config/urls.py` under `/api/`.
+
+### Health endpoint
+
+`GET /api/health/` returns `{"status": "ok"}` as JSON. It is deliberately not
+connected to authentication or business logic — it exists only to verify that
+Django is running, DRF is installed, URL routing works, and JSON responses
+work. Covered by an automated test in `apps/authentication/tests.py`.
+
+### DRF configuration
+
+Configured in `config/settings.py` under `REST_FRAMEWORK`:
+
+```text
+DEFAULT_RENDERER_CLASSES = [rest_framework.renderers.JSONRenderer]
+DEFAULT_PARSER_CLASSES   = [rest_framework.parsers.JSONParser]
+```
+
+JSON-only renderer/parser (no browsable API). No JWT, no custom permission
+system, and no response wrapper — those arrive together with the
+authentication step.
 
 ---
 
