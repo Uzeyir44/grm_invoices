@@ -4,8 +4,9 @@ A multi-tenant SaaS CRM and document-generation platform built with Python,
 Django, and PostgreSQL.
 
 The document below describes the **database architecture** as currently
-modeled in Django. Only implemented/models covered here; anything still in
-design is listed under [Future modules](#future-modules).
+modeled in Django, plus the **API layer** built on top of it. Only
+implemented features are covered here; anything still in design is listed
+under [Future modules](#future-modules).
 
 ## Project structure
 
@@ -21,7 +22,9 @@ design is listed under [Future modules](#future-modules).
 ├── apps/              # Business applications
 │   ├── companies/       # SaaS tenants, tenant settings and branding
 │   ├── authentication/  # Users, roles, permissions (own RBAC)
-│   │   └── api/         # Feature API: urls.py, views.py, serializers.py
+│   │   ├── backends.py  # CompanyEmailBackend + active_user_rule
+│   │   ├── tests/       # Health + authentication test suites
+│   │   └── api/         # Feature API: urls, views, serializers, authentication
 │   ├── reference_data/  # Shared/global lookup and reference tables
 │   ├── clients/         # Client management
 │   ├── document_templates/  # Document templates and their versions
@@ -70,10 +73,9 @@ design is listed under [Future modules](#future-modules).
 
 ## API layer
 
-A JSON API built on Django REST Framework (DRF, `rest_framework`). The API
-layer is under construction: only the foundation and the routing architecture
-exist so far. Authentication and business endpoints are intentionally
-**not** implemented yet.
+A JSON API built on Django REST Framework (DRF). The foundation and the
+company-aware JWT authentication system are implemented; business endpoints
+(clients, documents, …) are intentionally **not** built yet.
 
 ### Per-feature structure
 
@@ -82,8 +84,10 @@ Every feature keeps its API code in an `api/` subpackage inside its own app:
 ```text
 apps/authentication/
 ├── ...
+├── backends.py       # Company-aware auth backend + active_user_rule
+├── tests/            # Health + authentication tests
 └── api/
-    ├── __init__.py
+    ├── authentication.py  # CompanyJWTAuthentication (DRF auth class)
     ├── serializers.py
     ├── views.py
     └── urls.py
@@ -95,10 +99,13 @@ the same pattern and be mounted under `/api/<feature>/`.
 ### URL scheme
 
 ```text
-/api/health/          → liveness probe, returns {"status": "ok"}
-/api/authentication/  → authentication API router (empty until auth is built)
-/api/clients/         → planned
-/api/documents/       → planned
+/api/health/                      → liveness probe, returns {"status": "ok"}
+/api/authentication/token/        → POST login: issue JWT access + refresh pair
+/api/authentication/token/refresh/  → POST: rotate the access token
+/api/authentication/token/verify/   → POST: validate a token
+/api/authentication/me/           → GET current user + company (JWT required)
+/api/clients/                     → planned
+/api/documents/                   → planned
 ```
 
 The top-level router lives in `config/api_urls.py` and is mounted from
@@ -109,20 +116,235 @@ The top-level router lives in `config/api_urls.py` and is mounted from
 `GET /api/health/` returns `{"status": "ok"}` as JSON. It is deliberately not
 connected to authentication or business logic — it exists only to verify that
 Django is running, DRF is installed, URL routing works, and JSON responses
-work. Covered by an automated test in `apps/authentication/tests.py`.
+work. Covered by an automated test in `apps/authentication/tests/`.
 
 ### DRF configuration
 
 Configured in `config/settings.py` under `REST_FRAMEWORK`:
 
 ```text
-DEFAULT_RENDERER_CLASSES = [rest_framework.renderers.JSONRenderer]
-DEFAULT_PARSER_CLASSES   = [rest_framework.parsers.JSONParser]
+DEFAULT_RENDERER_CLASSES        = [rest_framework.renderers.JSONRenderer]
+DEFAULT_PARSER_CLASSES          = [rest_framework.parsers.JSONParser]
+DEFAULT_AUTHENTICATION_CLASSES  = [CompanyJWTAuthentication]
+DEFAULT_PERMISSION_CLASSES      = [rest_framework.permissions.IsAuthenticated]
 ```
 
-JSON-only renderer/parser (no browsable API). No JWT, no custom permission
-system, and no response wrapper — those arrive together with the
-authentication step.
+JSON-only renderer/parser (no browsable API). New API views require an
+authenticated user by default (fail-closed); public endpoints
+(`/api/health/` and the JWT token endpoints) opt out explicitly.
+
+## Authentication & JWT
+
+Production-oriented, company-aware authentication built on
+`djangorestframework-simplejwt`. It uses the project's own
+`authentication.User` (wired via `AUTH_USER_MODEL`); Django's stock
+`ModelBackend` is deliberately **never** used.
+
+### Company-aware login
+
+```text
+POST /api/authentication/token/   {"company_id": 1, "email": "...", "password": "..."}
+```
+
+`email` is unique per company, not globally, so the login request carries a
+`company_id` to disambiguate which tenant the credentials belong to. The
+company identifier is a **lookup key only**: it is used to resolve the user
+row during authentication and is never trusted again. After authentication,
+every authorization derives from `request.user` (and its owning company),
+never from a client-supplied company ID.
+
+All authentication failures — wrong password, unknown user, unknown company,
+inactive user, suspended/cancelled company — return the same generic 401, so
+credentials cannot be enumerated. Users of `trial` and `active` companies may
+log in; `suspended`/`cancelled` companies and deactivated or soft-deleted
+users are rejected. Passwords are stored via Django's password hashing
+(PBKDF2) and never appear in any response.
+
+### JWT claims
+
+Access/refresh tokens carry only `user_id` and `company_id`, plus the standard
+`iat`/`exp`/`jti`/`token_type` claims. No passwords, hashes, MFA secrets, or
+other sensitive data is placed in a token. Access tokens live 15 minutes;
+refresh tokens 1 day. The signing key is read from `JWT_SIGNING_KEY`,
+falling back to `DJANGO_SECRET_KEY`, so secrets stay in `.env`.
+
+### Access revocation
+
+A custom `CompanyJWTAuthentication` re-validates, on **every** authenticated
+request, that the token's user is still active and still belongs to an
+authenticatable company. Deactivating a user or suspending a company
+immediately revokes access, even for already-issued tokens. The same rule
+(`active_user_rule` in `apps/authentication/backends.py`) also gates login and
+token refresh.
+
+### Endpoints summary
+
+```text
+POST /api/authentication/token/          issue access + refresh pair   (public)
+POST /api/authentication/token/refresh/  rotate the access token       (public)
+POST /api/authentication/token/verify/   validate a token              (public)
+GET  /api/authentication/me/             current user + company        (JWT required)
+```
+
+### Request & response reference
+
+#### POST `/api/authentication/token/`
+
+Login with credentials scoped to a company.
+
+Request body:
+
+```json
+{
+    "company_id": 1,
+    "email": "user@example.com",
+    "password": "your-password"
+}
+```
+
+Response `200 OK`:
+
+```json
+{
+    "refresh": "<jwt-refresh-token>",
+    "access": "<jwt-access-token>"
+}
+```
+
+Response `401` — every authentication failure (wrong password, unknown user,
+unknown company, inactive user, suspended/cancelled company) returns this
+identical body so accounts cannot be enumerated:
+
+```json
+{
+    "detail": "No active account found with the given credentials"
+}
+```
+
+Response `400` — missing or invalid fields (e.g. `company_id` omitted):
+
+```json
+{
+    "company_id": ["This field is required."]
+}
+```
+
+#### POST `/api/authentication/token/refresh/`
+
+Rotate a refresh token into a fresh access token.
+
+Request body:
+
+```json
+{
+    "refresh": "<jwt-refresh-token>"
+}
+```
+
+Response `200 OK`:
+
+```json
+{
+    "access": "<new-jwt-access-token>"
+}
+```
+
+Response `401` — invalid or expired refresh token:
+
+```json
+{
+    "detail": "Token is invalid or expired",
+    "code": "token_not_valid"
+}
+```
+
+#### POST `/api/authentication/token/verify/`
+
+Whether a token is cryptographically valid (access or refresh; only checks
+the token itself, not the account's current state).
+
+Request body:
+
+```json
+{
+    "token": "<jwt-access-or-refresh-token>"
+}
+```
+
+Response `200 OK`:
+
+```json
+{}
+```
+
+Response `401` — invalid or expired token (same shape as refresh above).
+
+#### GET `/api/authentication/me/`
+
+The authenticated user and their company. Requires the header
+`Authorization: Bearer <access-token>`.
+
+Response `200 OK`:
+
+```json
+{
+    "id": 1,
+    "email": "user@example.com",
+    "first_name": "Dev",
+    "last_name": "User",
+    "is_active": true,
+    "mfa_enabled": false,
+    "company_id": 1,
+    "company_name": "Dev Co"
+}
+```
+
+Response `401` — no token: `{"detail": "Authentication credentials were not
+provided."}`; invalid/expired token: 401 `token_not_valid` (password/hash is
+never part of any response).
+
+### Development users
+
+No users are seeded by migrations; `apps/authentication/tests/` creates its
+own fixtures per test. For manual testing against the local PostgreSQL
+database one development account was created once:
+
+```text
+company_id: 1   display: "Dev Co"   (status: active)
+email:      dev@example.com
+password:   Dev-pass-123!
+```
+
+This is local development data only — it lives in your database, not in the
+codebase. To re-create it (e.g. after a database reset), run:
+
+```bash
+python manage.py shell <<'PY'
+from apps.companies.models import Company
+from apps.authentication.models import User
+
+company, _ = Company.objects.get_or_create(
+    legal_name="Dev Company",
+    display_name="Dev Co",
+    defaults={"status": Company.Status.ACTIVE},
+)
+user, created = User.objects.get_or_create(
+    company=company,
+    email="dev@example.com",
+    defaults={"first_name": "Dev", "last_name": "User"},
+)
+if created:
+    user.set_password("Dev-pass-123!")
+    user.save(update_fields=["password"])
+print(f"company_id={company.id} user_id={user.id} created={created}")
+PY
+```
+
+### Tests
+
+Authentication behaviour — login success/failure, tenant isolation, token
+expiry and revocation, password security, and `/me/` — is covered in
+`apps/authentication/tests/` and runs with `python manage.py test`.
 
 ---
 
@@ -234,10 +456,11 @@ Company
 
 - Every user belongs to exactly one company. A company can have many users.
 - User email is **unique per company, not globally** (unique constraint on
-  `(company, email)` for non-deleted users). Authentication will therefore
-  require company-aware authentication in the future: the company must be
-  resolved first (subdomain, company picker, etc.) and the user looked up by
-  the `(company, email)` pair.
+  `(company, email)` for non-deleted users). Authentication is therefore
+  company-aware: the company is resolved first (login payload, subdomain,
+  company picker, etc.) and the user is looked up by the `(company, email)`
+  pair. See [Authentication & JWT](#authentication--jwt) for the implemented
+  flow.
 - `User` uses Django `AbstractBaseUser`.
 - Django's default `PermissionsMixin` is intentionally **not** used because
   the CRM has its own RBAC system based on `Role` / `Permission`.

@@ -6,6 +6,7 @@ when present) so configuration stays separate from the business code.
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 import environ
@@ -46,6 +47,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "rest_framework_simplejwt",
     # Business applications will be registered here in apps.* when added.
     "apps.companies",
     "apps.authentication",
@@ -56,6 +58,18 @@ INSTALLED_APPS = [
     "apps.generated_documents",
     "apps.audit_logs",
     "apps.database",
+]
+
+# The project uses its own company-aware User model (apps.authentication.User).
+# Setting AUTH_USER_MODEL is required so every auth lookup (request.user,
+# get_user_model(), the JWT layer) references this model and never the stock
+# django.contrib.auth.User.
+AUTH_USER_MODEL = "authentication.User"
+
+# Email is unique per company, not globally, so the stock ModelBackend is
+# deliberately NOT used. See apps/authentication/backends.py.
+AUTHENTICATION_BACKENDS = [
+    "apps.authentication.backends.CompanyEmailBackend",
 ]
 
 MIDDLEWARE = [
@@ -168,4 +182,38 @@ REST_FRAMEWORK = {
     "DEFAULT_PARSER_CLASSES": [
         "rest_framework.parsers.JSONParser",
     ],
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "apps.authentication.api.authentication.CompanyJWTAuthentication",
+    ],
+    # Fail closed: new API views require an authenticated user by default.
+    # Public endpoints (health, token endpoints) opt out explicitly.
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+}
+
+# Django REST Framework SimpleJWT configuration.
+# The signing key comes from the environment (JWT_SIGNING_KEY) and, when
+# unset, falls back to DJANGO_SECRET_KEY so secrets stay out of source code.
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    "ROTATE_REFRESH_TOKENS": False,
+    "BLACKLIST_AFTER_ROTATION": False,
+    "UPDATE_LAST_LOGIN": False,
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": env("JWT_SIGNING_KEY", SECRET_KEY),
+    "VERIFYING_KEY": None,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+    "AUTH_TOKEN_CLASSES": ("rest_framework_simplejwt.tokens.AccessToken",),
+    "TOKEN_TYPE_CLAIM": "token_type",
+    "JTI_CLAIM": "jti",
+    # Enforced at token issue and refresh: the user and their company must
+    # both be currently active (trial/active companies allowed).
+    "USER_AUTHENTICATION_RULE": "apps.authentication.backends.active_user_rule",
+    "TOKEN_OBTAIN_SERIALIZER": (
+        "apps.authentication.api.serializers.CompanyTokenObtainPairSerializer"
+    ),
 }
