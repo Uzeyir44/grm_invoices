@@ -32,7 +32,7 @@ class ClientAPITestCase(APITestCase):
         self.alice = make_user(self.company_a, email="alice@example.com")
         self.bob = make_user(self.company_a, email="bob@example.com")
         self.carol = make_user(self.company_b, email="carol@example.com")
-        self.address_type = AddressType.objects.create(code="legal")
+        self.address_type = AddressType.objects.create(code="test_address")
         self.currency = Currency.objects.create(code="AZN", name="Azerbaijani Manat")
         self.bank = Bank.objects.create(name="Test Bank")
 
