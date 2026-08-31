@@ -29,6 +29,8 @@ under [Future modules](#future-modules).
 │   │   └── api/         # Feature API: urls, views, serializers, permissions, authentication
 │   ├── reference_data/  # Shared/global lookup and reference tables
 │   ├── clients/         # Client management
+│   │   ├── api/         # Client API: serializers, views, urls
+│   │   └── tests/       # Client API test suite
 │   ├── document_templates/  # Document templates and their versions
 │   ├── company_document_counters/  # Per-company document numbering counters
 │   ├── generated_documents/  # Generated documents, versions, and line items
@@ -429,6 +431,92 @@ vs company-scoped roles, cross-company role assignment being blocked, and the
 `IsCompanyMember` / `IsSameCompanyObject` permission classes. The small
 client views used there are **test-only fixtures** — a full Client API is a
 later step.
+
+---
+
+## Client Management API
+
+The first feature API built on the authentication and tenant-isolation
+foundations. All endpoints are JSON-only, JWT-protected, and tenant-scoped to
+`request.user.company`.
+
+### Endpoints
+
+```text
+GET    /api/clients/                              list clients (tenant-scoped)
+POST   /api/clients/                              create client (+subtype)
+GET    /api/clients/<id>/                         retrieve client + subtype + nested
+PATCH  /api/clients/<id>/                         update client / subtype
+DELETE /api/clients/<id>/                         soft-delete client
+
+GET    /api/clients/<id>/addresses/               list / create addresses
+GET    /api/clients/<id>/addresses/<aid>/         get / patch / delete address
+GET    /api/clients/<id>/contacts/                list / create contacts
+GET    /api/clients/<id>/contacts/<cid>/          get / patch / delete contact
+GET    /api/clients/<id>/bank-accounts/           list / create bank accounts
+GET    /api/clients/<id>/bank-accounts/<bid>/     get / patch / delete bank account
+```
+
+- `GET /api/clients/` supports `client_type`, `status`, and `search`
+  (subtype legal name / individual first+last name) query parameters.
+- Database status codes follow DRF conventions: 200 / 201 / 204 / 400 /
+  401 / 403 / 404.
+
+### Permissions
+
+Seeded (data migration `authentication.0002`) permission codes:
+
+```text
+clients.read    clients.create    clients.update    clients.delete
+```
+
+Views require `IsCompanyMember` plus the code matching the HTTP method
+(`permission_required(...)` from the Step-2 foundation); nested-record writes
+require `clients.update`. Codes are granted to users through `Role` /
+`UserRole` as usual.
+
+### Subtype validation
+
+`client_type` decides which subtype the payload may/must carry:
+
+```text
+client_type = individual    →  individual required, legal_entity forbidden
+client_type = legal_entity  →  legal_entity required, individual forbidden
+```
+
+`client_type` is immutable after creation (matches the DB type-change guard).
+VOEN is unique within a company (cross-company VOEN reuse is allowed; tested).
+
+### Deletion
+
+`DELETE` **soft-deletes** by setting `deleted_at` — the row and its subtype /
+nested history are preserved. Soft-deleted clients disappear from the normal
+list and resolve to 404 on detail / nested operations.
+
+### Tenant isolation
+
+Every lookup goes through the Step-2 helpers:
+
+```python
+tenant_queryset(Client, request.user.company)          # Rule C (listing)
+get_tenant_object_or_404(Client, request.user.company, # Rule D (single)
+                         pk=pk, deleted_at__isnull=True)
+```
+
+Creation binds the client to `request.user.company` (a body `company_id` is
+ignored). Nested children are doubly scoped: they must belong to the caller's
+company **and** to the parent client, otherwise 404. This blocks IDOR attempts
+such as a Company-A user reaching a Company-B client or one of its children
+by guessing IDs.
+
+### Tests
+
+`apps/clients/tests/test_api.py` (43 tests): access/RBAC matrix across the
+four permission codes, tenant isolation (read/update/delete cross-company →
+404), creation ownership and `company_id`-ignored, individual & legal-entity
+subtypes, nested address/contact/bank-account CRUD + cross-company isolation,
+soft-deletion behaviour, and validation (client type, VOEN, primary address /
+default bank account, IBAN).
 
 ---
 

@@ -14,4 +14,5 @@ def health(request):
 urlpatterns = [
     path("health/", health, name="api-health"),
     path("authentication/", include("apps.authentication.api.urls")),
+    path("clients/", include("apps.clients.api.urls")),
 ]
