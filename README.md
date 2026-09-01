@@ -32,6 +32,8 @@ under [Future modules](#future-modules).
 │   │   ├── api/         # Client API: serializers, views, urls
 │   │   └── tests/       # Client API test suite
 │   ├── document_templates/  # Document templates and their versions
+│   │   ├── api/         # Document Template API: serializers, views, urls
+│   │   └── tests/       # Document Template API test suite
 │   ├── company_document_counters/  # Per-company document numbering counters
 │   ├── generated_documents/  # Generated documents, versions, and line items
 │   └── audit_logs/  # Append-only audit trail
@@ -78,8 +80,9 @@ under [Future modules](#future-modules).
 ## API layer
 
 A JSON API built on Django REST Framework (DRF). The foundation and the
-company-aware JWT authentication system are implemented; business endpoints
-(clients, documents, …) are intentionally **not** built yet.
+company-aware JWT authentication system are implemented, along with the
+Client Management and Document Template Management feature APIs. Further
+business endpoints (documents, …) are intentionally **not** built yet.
 
 ### Per-feature structure
 
@@ -97,8 +100,8 @@ apps/authentication/
     └── urls.py
 ```
 
-Future features (`apps/clients`, `apps/generated_documents`, …) will follow
-the same pattern and be mounted under `/api/<feature>/`.
+Each implemented feature (`apps/clients`, `apps/document_templates`, …)
+follows the same pattern and is mounted under `/api/<feature>/`.
 
 ### URL scheme
 
@@ -108,7 +111,8 @@ the same pattern and be mounted under `/api/<feature>/`.
 /api/authentication/token/refresh/  → POST: rotate the access token
 /api/authentication/token/verify/   → POST: validate a token
 /api/authentication/me/           → GET current user + company (JWT required)
-/api/clients/                     → planned
+/api/clients/                     → client management (see below)
+/api/document-templates/          → document template management (see below)
 /api/documents/                   → planned
 ```
 
@@ -520,6 +524,87 @@ default bank account, IBAN).
 
 ---
 
+## Document Template Management API
+
+The second feature API built on the authentication and tenant-isolation
+foundations. It manages the **metadata** of a company's document templates
+(`DocumentTemplate`); the template **files** and `TemplateVersion` history are
+a later step and are deliberately not exposed here. All endpoints are
+JSON-only, JWT-protected, and tenant-scoped to `request.user.company`.
+
+### Endpoints
+
+```text
+GET    /api/document-templates/              list templates (tenant-scoped)
+POST   /api/document-templates/              create a template
+GET    /api/document-templates/<id>/         retrieve a template
+PATCH  /api/document-templates/<id>/         update metadata / activate or deactivate
+DELETE /api/document-templates/<id>/         soft-delete a template
+```
+
+- `GET /api/document-templates/` supports a `document_type` query parameter to
+  filter by the shared `DocumentType` reference.
+- A template is created from the metadata fields only:
+  `document_type` (the shared lookup id), `name`, and optionally `is_active`
+  (defaults to `true`).
+- Status codes follow DRF conventions: 201 on create, 204 on delete,
+  400 / 401 / 403 / 404 as appropriate.
+
+### Permissions
+
+Seeded (data migration `authentication.0003`) permission codes:
+
+```text
+document_templates.read    document_templates.create
+document_templates.update  document_templates.delete
+```
+
+Views require `IsCompanyMember` plus the code matching the HTTP method
+(`permission_required(...)` from the Step-2 foundation): `read` for list and
+retrieve, `create` for POST, `update` for PATCH, `delete` for DELETE. Codes are
+granted to users through `Role` / `UserRole` as usual.
+
+### Activation & deactivation
+
+The model exposes an `is_active` boolean, so activation/deactivation uses the
+regular update mechanism: `PATCH /api/document-templates/<id>/` with
+`{"is_active": false}` deactivates and `{"is_active": true}` reactivates.
+Templates are created active by default. The toggle is company-scoped — a
+cross-company PATCH resolves to 404 and never mutates the other company's row.
+
+### Deletion
+
+`DELETE` **soft-deletes** by setting `deleted_at` — the row is preserved
+(company and template history use `PROTECT`). Soft-deleted templates disappear
+from the normal list and resolve to 404 on detail / update / delete operations.
+
+### Tenant isolation & company binding
+
+Every lookup goes through the Step-2 helpers:
+
+```python
+tenant_queryset(DocumentTemplate, request.user.company)          # Rule C (listing)
+get_tenant_object_or_404(DocumentTemplate, request.user.company, # Rule D (single)
+                         pk=pk, deleted_at__isnull=True)
+```
+
+Creation binds the template to `request.user.company` — `company` is not a
+writable serializer field and a body `company_id` is ignored. The DB-level
+`prevent_company_id_change()` trigger additionally guarantees a template never
+changes companies. Cross-company list/retrieve/update/delete all resolve to
+`404` (never revealing that the object exists).
+
+### Tests
+
+`apps/document_templates/tests/test_api.py` (30 tests): access/RBAC matrix
+across the four permission codes, tenant isolation (list/retrieve/update/
+delete cross-company → 404), creation ownership and `company_id`-ignored,
+update and company immutability, activation/deactivation (including
+company-scoped), soft-deletion behaviour, and validation (required fields,
+invalid `document_type`, name length, list filter).
+
+---
+
 # Database architecture
 
 ## Multi-tenancy architecture
@@ -831,7 +916,13 @@ Company
 - As in other apps, the composite FKs, the `UNIQUE(id, company_id)` target on
   `DocumentTemplate`, and the INSERT-only invariant on `TemplateVersion`
   require PostgreSQL composite foreign keys and triggers that Django cannot
-  express natively; these are planned as raw-SQL migration additions.
+  express natively; these are added via the raw-SQL migration
+  `apps/database/migrations/0002_raw_sql_constraints.py` (see below).
+- The **metadata** layer (create / list / retrieve / update / activate /
+  deactivate / soft-delete a template) is implemented as the Document Template
+  Management API (see [Document Template Management API](#document-template-management-api)).
+  Managing template **files** and `TemplateVersion` history is a later step and
+  is not yet exposed through the API.
 
 ## 6. Company Document Counters
 
@@ -979,11 +1070,10 @@ Company
 
 ## Future modules
 
-The following modules are **designed but not yet implemented** in Django at
-this point:
+The following are **designed but not yet implemented** in Django at this
+point:
 
 - PostgreSQL RLS policies
-- PostgreSQL triggers for database-level integrity rules
 
 These are planned/future work and must not be treated as implemented.
 
@@ -1003,8 +1093,15 @@ audit_logs / AuditLog
 ### Planned/future
 
 ```text
-PostgreSQL RLS policies, PostgreSQL triggers for database-level integrity rules
+PostgreSQL RLS policies
 ```
+
+Note: the PostgreSQL **composite foreign keys, immutable-`company` triggers,
+client-subtype exclusivity, RBAC role/company-match trigger, and version /
+line-item / audit-log INSERT-only triggers** that the earlier sections
+describe as "planned" were applied in
+`apps/database/migrations/0002_raw_sql_constraints.py`. Only RLS policies
+remain in the future-work list above.
 
 ## Architecture Rules
 
