@@ -888,94 +888,99 @@ document is written to a separate output path/buffer.
 ### What is intentionally deferred
 
 ```text
-Complete document-generation flow → Step 4.4 (next)
+Complete document-generation flow → Step 4.4 (implemented, see below)
 PDF generation                   → future step
 ```
 
 ---
 
-## Document Generation — Repeating Line Items
+## Document Generation — Complete DOCX Generation Service
 
-Step 4.3 of document generation: the placeholder engine supports **repeating
-line-item sections** so invoice/financial templates can render an arbitrary
-number of line items from the document's `DocumentLineItem` rows. This remains
-inside the same reusable service
-(`apps/generated_documents/services/placeholder_engine.py`); no API, no
-persistence workflow, and no PDF output yet.
-
-### Repeating-section syntax
-
-Controlled `{{#each items}} ... {{/each}}` markers — `items` is the *only*
-supported collection name and maps to the document's line items.
+Step 4.4 of document generation: a reusable end-to-end service
+(`apps/generated_documents/services/generator.py`) that orchestrates Steps
+4.1–4.3 into one flow and records the result as a `GeneratedDocumentVersion`.
+It is independent of HTTP/DRF.
 
 ```text
-{{#each items}}
-{{ item.description }} | {{ item.quantity }} | {{ item.unit_price }} | {{ item.total }}
-{{/each}}
+GeneratedDocument
+        ↓   select active TemplateVersion
+Build generation context (Step 4.1: company/client/document/items)
+        ↓   read template file (never modified)
+Placeholder engine (Step 4.2/4.3: placeholders + repeating line items)
+        ↓
+Rendered DOCX bytes
+        ↓   persist through default storage + create version row
+GeneratedDocumentVersion
 ```
 
-Table rows use the same markers inside a single **prototype row**: the row's
-*first* cell starts with `{{#each items}}` and its *last* cell ends with
-`{{/each}}`, with the `{{ item.* }}` placeholders in the other cells.
+### GeneratedDocument ↔ TemplateVersion
 
-### The `items` collection and `item.*` variables
+A `GeneratedDocument` references a shared `DocumentTemplate` (via `template`).
+The service selects that template's **single active `TemplateVersion`** (the
+existing versioning rule) and renders from its stored `.docx` snapshot; there
+is no per-document template-version selection. The generated version records
+exactly which `TemplateVersion` (id) produced the artifact, so output is
+reproducible. The stored template file is read-only and never overwritten.
 
-The context builder (`services/context.py`) reads line items from a
-`GeneratedDocumentVersion` (defaulting to the document's latest version) in
-`line_number` order and exposes them as `context["items"]`, a list of items.
-Each item maps the `item.*` variables (all from the real `DocumentLineItem`
-model — nothing is invented):
+### Context and placeholder integration
+
+The generator calls the Step 4.1 context builder (no duplicated logic) and
+passes the result to the Step 4.2/4.3 placeholder engine unchanged. The
+`items` collection is taken from the document's latest existing version's line
+items (empty on the first generation), so simple placeholders and
+`{{#each items}}` table-row replication both keep working end-to-end.
+
+### GeneratedDocumentVersion
+
+Each successful generation creates a `GeneratedDocumentVersion` recording the
+parent document, the (copied) company, the next version number, the
+`TemplateVersion` used, the resolved currency, optional
+exchange-rate/VAT-rate snapshots, the full generation context
+(`generation_snapshot`, JSON-safe), minimal technical metadata (engine
+version), and the stored DOCX path (`storage_path_docx`).
+
+### Versioning / regeneration
+
+Version numbers are `max(existing) + 1`, assigned under a row lock
+(`SELECT ... FOR UPDATE`) in a transaction with the DB `UNIQUE(document,
+version_number)` as a backstop. Regenerating the same document always creates
+a **new** version (#2, #3, …) — the previous version and its file remain
+retrievable. On success a document in `draft` status is advanced to
+`generated` (existing status values only).
+
+### File storage
+
+The rendered DOCX is persisted through Django's configured default storage
+(no custom/cloud storage, no hard-coded absolute paths) and the returned
+relative path is recorded in `storage_path_docx` (the version model stores a
+path, not a `FileField`). File names are derived from the sanitized document
+number + version number (e.g. `generated/company_<id>/doc_<id>/v1/<number>-v1.docx`),
+so user input can never be used as a raw filesystem path.
+
+### Failure behavior
+
+If placeholder validation fails (`UnknownPlaceholderError`,
+`MissingRequiredValueError`), required data is missing
+(`GenerationContextError`), no active template version/file exists, or the
+currency cannot be resolved (`GenerationError`), **no** `GeneratedDocumentVersion`
+is created, no file is left behind, and the document status is unchanged. If
+DB persistence fails after the file is written, the stored file is removed.
+Placeholder/rendering errors propagate exactly as in Steps 4.1–4.3.
+
+### Tenant safety
+
+The authoritative tenant is `generated_document.company`. The selected
+`TemplateVersion` must belong to the document's template *and* company;
+the Step 4.1 context builder re-checks company/client/document consistency;
+and DB composite-FK triggers independently forbid a cross-company document
+from existing. No client-supplied company ID is ever used.
+
+### Deferred
 
 ```text
-item.line_number    item.description    item.quantity    item.unit
-item.unit_price     item.discount_percent item.vat_rate_percent
-item.subtotal       item.vat_amount     item.total
-```
-
-`{{ item.* }}` is only valid inside a repeating section.
-
-### Table-row behavior
-
-The row containing the markers is the **prototype row**: it is cloned once per
-line item and the `{{#each items}}` / `{{/each}}` markers are stripped. The
-header row and totals rows remain unchanged, and the prototype row does not
-remain as an extra empty row.
-
-### Empty-collection behavior
-
-With zero line items (`items = []`), any repeating section produces **no
-rows/paragraphs** — the prototype row is removed and no `{{ item.* }}` residue
-is left behind.
-
-### Formatting preservation
-
-Cloned rows are deep copies of the prototype row's XML, so cell/paragraph/font
-formatting, borders and alignment are preserved. Only the marker text is
-stripped and the `{{ ... }}` placeholders replaced.
-
-### Security restrictions
-
-The template language remains data-only: no `eval`, no `exec`, no expression
-execution. Only the approved variables and the fixed `items` collection are
-resolved. `{{#each unknown_collection}}`, unbalanced/nested markers, and
-`{{ item.* }}` outside a section all raise
-`UnknownPlaceholderError` before anything is written.
-
-### What is intentionally deferred
-
-```text
-Nested loops / conditionals / filters / arbitrary expressions → not supported
-Complete document-generation flow                             → Step 4.4 (next)
-PDF generation                                                → future step
-```
-
-### Document generation roadmap
-
-```text
-4.1 Data Context Builder       ✅
-4.2 Placeholder Engine         ✅
-4.3 Repeating Line Items       ✅
-4.4 Complete Generation Flow  ← upcoming
+PDF generation                → Step 4.5 (upcoming)
+Generation / download API     → Step 4.6 (upcoming)
+Line-item row copying for new versions → manual editing step (not this step)
 ```
 
 ---
