@@ -639,3 +639,202 @@ class DocumentTemplateFileTenantIsolationTests(DocumentTemplateFileAPITestCase):
         self.auth(self.alice)
         response = self.client.get(self.template_file_url(self.other.id))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class DocumentTemplateVersionAPITestCase(DocumentTemplateAPITestCase):
+    ALL = ALL_DOCUMENT_TEMPLATE_PERMISSIONS + (
+        "document_templates.version_create",
+        "document_templates.version_activate",
+    )
+
+    def make_docx_with_text(self, text, name="tpl.docx"):
+        """Build a real-ish WordprocessingML docx whose body contains `text`."""
+        from io import BytesIO
+        from zipfile import ZIP_DEFLATED, ZipFile
+
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        body = "".join(f"<w:p><w:r><w:t>{part}</w:t></w:r></w:p>" for part in text)
+        document = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/'
+            'wordprocessingml/2006/main"><w:body>'
+            f"{body}</w:body></w:document>"
+        )
+        buf = BytesIO()
+        with ZipFile(buf, "w", ZIP_DEFLATED) as z:
+            z.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+            z.writestr("_rels/.rels", "<Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'/>")
+            z.writestr("word/document.xml", document)
+        buf.seek(0)
+        return SimpleUploadedFile(name, buf.read(), content_type="application/octet-stream")
+
+    def attach_file(self, template, text):
+        self.client.post(
+            reverse("document-template-file", kwargs={"pk": template.id}),
+            {"file": self.make_docx_with_text(text)},
+            format="multipart",
+        )
+        template.refresh_from_db()
+
+    def versions_url(self, template_id):
+        return reverse("document-template-version-list-create", kwargs={"pk": template_id})
+
+    def version_detail_url(self, template_id, version_id):
+        return reverse(
+            "document-template-version-detail",
+            kwargs={"pk": template_id, "version_id": version_id},
+        )
+
+    def version_activate_url(self, template_id, version_id):
+        return reverse(
+            "document-template-version-activate",
+            kwargs={"pk": template_id, "version_id": version_id},
+        )
+
+
+class DocumentTemplateVersionCreateTests(DocumentTemplateVersionAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.grant(self.alice, *self.ALL)
+        self.template = self.make_template_row(self.company_a, name="Version Template")
+        self.auth(self.alice)
+        self.attach_file(
+            self.template,
+            "Hello {{ company.name }} and {{ client.name }} ({{ document.number }})",
+        )
+
+    def test_first_version_can_be_created(self):
+        response = self.client.post(self.versions_url(self.template.id))
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.json()["version_number"], 1)
+        self.assertTrue(response.json()["is_active"])
+
+    def test_new_version_gets_next_number_historical_unchanged(self):
+        v1 = self.client.post(self.versions_url(self.template.id)).json()
+        self.assertEqual(v1["version_number"], 1)
+        # Change the working file, then create a second version.
+        self.attach_file(self.template, "Updated {{ company.legal_name }}")
+        v2 = self.client.post(self.versions_url(self.template.id)).json()
+        self.assertEqual(v2["version_number"], 2)
+        self.assertTrue(v2["is_active"])
+        # v1 must be preserved (contents intact) and no longer active.
+        self.template.refresh_from_db()
+        v1_detail = self.client.get(
+            self.version_detail_url(self.template.id, v1["id"])
+        ).json()
+        self.assertEqual(v1_detail["version_number"], 1)
+        self.assertFalse(v1_detail["is_active"])
+
+    def test_version_uniqueness_is_respected(self):
+        v1 = self.client.post(self.versions_url(self.template.id)).json()
+        # Manually inject a conflict and confirm the DB uniqueness applies.
+        from apps.document_templates.models import TemplateVersion
+        self.assertFalse(
+            TemplateVersion.objects.filter(
+                template=self.template, version_number=1
+            ).exclude(pk=v1["id"]).exists()
+        )
+
+    def test_version_create_requires_permission(self):
+        self.grant(self.bob, "document_templates.read", "document_templates.update")
+        self.auth(self.bob)
+        response = self.client.post(self.versions_url(self.template.id))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_version_create_requires_a_file(self):
+        empty = self.make_template_row(self.company_a, name="No File Template")
+        response = self.client.post(self.versions_url(empty.id))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_invalid_placeholder_content_is_rejected(self):
+        self.attach_file(self.template, "Bad {{ client.foo }} here")
+        response = self.client.post(self.versions_url(self.template.id))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("invalid_placeholders", response.json())
+
+
+class DocumentTemplateVersionActivationTests(DocumentTemplateVersionAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.grant(self.alice, *self.ALL)
+        self.template = self.make_template_row(self.company_a, name="Activation Template")
+        self.auth(self.alice)
+        self.attach_file(self.template, "V1 {{ company.name }}")
+        self.v1 = self.client.post(self.versions_url(self.template.id)).json()
+        self.attach_file(self.template, "V2 {{ company.name }}")
+        self.v2 = self.client.post(self.versions_url(self.template.id)).json()
+        self.assertEqual(self.v2["is_active"], True)
+        # Creating v2 deactivated v1 in the database.
+        from apps.document_templates.models import TemplateVersion
+        self.assertFalse(
+            TemplateVersion.objects.get(pk=self.v1["id"]).is_active
+        )
+
+    def test_activating_older_version_flips_active_flag(self):
+        response = self.client.post(
+            self.version_activate_url(self.template.id, self.v1["id"])
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.json()["is_active"])
+        # Only one active version remains.
+        self.template.refresh_from_db()
+        active = self.template.versions.filter(is_active=True)
+        self.assertEqual(active.count(), 1)
+        self.assertEqual(active.first().pk, self.v1["id"])
+        self.assertFalse(self.template.versions.get(pk=self.v2["id"]).is_active)
+
+    def test_only_one_version_active_after_activation(self):
+        self.client.post(self.version_activate_url(self.template.id, self.v1["id"]))
+        active = self.template.versions.filter(is_active=True)
+        self.assertEqual(active.count(), 1)
+        self.assertEqual(active.first().pk, self.v1["id"])
+
+    def test_activation_requires_permission(self):
+        self.grant(self.bob, "document_templates.read")
+        self.auth(self.bob)
+        response = self.client.post(
+            self.version_activate_url(self.template.id, self.v2["id"])
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class DocumentTemplateVersionTenantIsolationTests(DocumentTemplateVersionAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.grant(self.alice, *self.ALL)
+        self.grant(self.carol, *self.ALL)
+        self.template_a = self.make_template_row(self.company_a, name="T A")
+        self.template_b = self.make_template_row(self.company_b, name="T B")
+        self.auth(self.carol)
+        self.attach_file(self.template_b, "B {{ company.voen }}")
+        self.carol_v = self.client.post(self.versions_url(self.template_b.id)).json()
+        self.auth(self.alice)
+        self.attach_file(self.template_a, "A {{ company.voen }}")
+        self.alice_v = self.client.post(self.versions_url(self.template_a.id)).json()
+
+    def test_company_a_cannot_list_company_b_versions(self):
+        response = self.client.get(self.versions_url(self.template_b.id))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_company_a_cannot_retrieve_company_b_version(self):
+        response = self.client.get(
+            self.version_detail_url(self.template_b.id, self.carol_v["id"])
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_company_a_cannot_create_version_for_company_b(self):
+        response = self.client.post(self.versions_url(self.template_b.id))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_company_a_cannot_activate_company_b_version(self):
+        response = self.client.post(
+            self.version_activate_url(self.template_b.id, self.carol_v["id"])
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_own_versions_are_listable(self):
+        response = self.client.get(self.versions_url(self.template_a.id))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.json()), 1)
+        self.assertEqual(response.json()[0]["id"], self.alice_v["id"])

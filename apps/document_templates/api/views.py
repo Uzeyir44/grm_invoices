@@ -13,8 +13,12 @@ from apps.authentication.tenant import get_tenant_object_or_404, tenant_queryset
 from apps.document_templates.api.serializers import (
     DocumentTemplateFileSerializer,
     DocumentTemplateSerializer,
+    TemplateVersionSerializer,
 )
-from apps.document_templates.models import DocumentTemplate
+from apps.document_templates.docx_text import extract_docx_text
+from apps.document_templates.models import DocumentTemplate, TemplateVersion
+from apps.document_templates.services import versioning
+from apps.document_templates.variables import validate_placeholders
 
 
 class MethodPermissionAPIView(APIView):
@@ -190,3 +194,108 @@ class DocumentTemplateFileView(MethodPermissionAPIView):
         template.file = None
         template.save(update_fields=["file", "updated_at"])
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+def version_object_or_404(request, template, version_id):
+    """
+    Tenant-scoped version lookup that also enforces the version belongs to
+    the given (already tenant-verified) template — Rule D + Rule E.
+    """
+    return get_tenant_object_or_404(
+        TemplateVersion,
+        request.user.company,
+        pk=version_id,
+        template_id=template.id,
+    )
+
+
+class DocumentTemplateVersionListCreateView(MethodPermissionAPIView):
+    """
+      GET  -> list this template's versions (tenant-scoped)
+      POST -> create a new immutable version snapshot from the template's
+              current file; validates placeholders in the actual docx text.
+    """
+
+    method_permissions = {
+        "GET": "document_templates.read",
+        "POST": "document_templates.version_create",
+    }
+
+    def get(self, request, pk):
+        template = template_object_or_404(request, pk)
+        versions = tenant_queryset(TemplateVersion, request.user.company).filter(
+            template_id=template.id
+        ).order_by("version_number")
+        return Response(TemplateVersionSerializer(versions, many=True).data)
+
+    def post(self, request, pk):
+        template = template_object_or_404(request, pk)
+        if not template.file:
+            return Response(
+                {"detail": "This template has no file to snapshot."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Inspect the actual document text and reject unknown/malformed
+        # placeholders before a version is recorded.
+        template.file.open("rb")
+        try:
+            text = extract_docx_text(template.file)
+        except ValueError as exc:
+            template.file.close()
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        template.file.close()
+        _valid, invalid = validate_placeholders(text)
+        if invalid:
+            return Response(
+                {
+                    "detail": (
+                        "The template contains invalid or unknown placeholders."
+                    ),
+                    "invalid_placeholders": invalid,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        template.file.open("rb")
+        try:
+            version = versioning.create_version(
+                template, template.file, created_by=request.user
+            )
+        finally:
+            # Caller opened the handle; close it so Windows can release the
+            # file lock (the next file replacement deletes the previous file).
+            template.file.close()
+        return Response(
+            TemplateVersionSerializer(version).data, status=status.HTTP_201_CREATED
+        )
+
+
+class DocumentTemplateVersionDetailView(MethodPermissionAPIView):
+    """
+      GET -> retrieve a specific version. Versions are immutable history, so
+      there is deliberately no update or delete handler.
+    """
+
+    method_permissions = {
+        "GET": "document_templates.read",
+    }
+
+    def get(self, request, pk, version_id):
+        template = template_object_or_404(request, pk)
+        version = version_object_or_404(request, template, version_id)
+        return Response(TemplateVersionSerializer(version).data)
+
+
+class DocumentTemplateVersionActivateView(MethodPermissionAPIView):
+    """
+    POST .../versions/<version_id>/activate/ — make this version the
+    template's single active version. Company-scoped and RBAC-protected.
+    """
+
+    method_permissions = {"POST": "document_templates.version_activate"}
+
+    def post(self, request, pk, version_id):
+        template = template_object_or_404(request, pk)
+        version = version_object_or_404(request, template, version_id)
+        versioning.activate_version(template, version)
+        return Response(TemplateVersionSerializer(version).data)

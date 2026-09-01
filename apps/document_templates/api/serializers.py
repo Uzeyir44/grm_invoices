@@ -5,7 +5,7 @@ from django.conf import settings
 
 from rest_framework import serializers
 
-from apps.document_templates.models import DocumentTemplate
+from apps.document_templates.models import DocumentTemplate, TemplateVersion
 
 MAX_TEMPLATE_FILE_SIZE = getattr(settings, "MAX_TEMPLATE_FILE_SIZE", 5 * 1024 * 1024)
 ALLOWED_TEMPLATE_EXTENSIONS = {".docx"}
@@ -88,3 +88,35 @@ class DocumentTemplateFileSerializer(serializers.Serializer):
         finally:
             value.seek(0)
         return value
+
+
+class TemplateVersionSerializer(serializers.ModelSerializer):
+    """
+    Read-only representation of an immutable TemplateVersion snapshot.
+
+    ``storage_path`` is deliberately not exposed (filesystem paths must not
+    leak to clients); the file is available as a URL instead. ``company``
+    descends from the template and is never client-settable.
+    """
+
+    company_id = serializers.IntegerField(read_only=True)
+    file_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TemplateVersion
+        fields = [
+            "id",
+            "template_id",
+            "company_id",
+            "version_number",
+            "is_active",
+            "file",
+            "file_name",
+            "checksum",
+            "created_by_id",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_file_name(self, obj):
+        return obj.file.name if obj.file else None

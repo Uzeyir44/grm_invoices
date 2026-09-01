@@ -15,6 +15,21 @@ def template_file_upload_path(instance, filename):
     return f"templates/company_{instance.company_id}/{instance.id}.docx"
 
 
+def template_version_upload_path(instance, filename):
+    """
+    Store a version's snapshot under a stable, history-preserving path:
+    templates/company_<id>/<template_id>/v<version>_<random>.docx. The random
+    suffix keeps the overwrite semantics of the template's single current file
+    from ever clobbering a historical version.
+    """
+    import uuid
+
+    return (
+        f"templates/company_{instance.company_id}/{instance.template_id}/"
+        f"v{instance.version_number}_{uuid.uuid4().hex}.docx"
+    )
+
+
 class DocumentTemplate(models.Model):
     """
     A company's template for a given document type (consulting contract,
@@ -106,6 +121,22 @@ class TemplateVersion(models.Model):
         help_text="e.g. /storage/templates/company_123/template_45/version_3.docx"
     )
     checksum = models.CharField(max_length=64, blank=True, null=True)
+
+    file = models.FileField(
+        upload_to=template_version_upload_path,
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="The immutable .docx snapshot stored for this version.",
+    )
+    is_active = models.BooleanField(
+        default=False,
+        help_text=(
+            "True when this is the template's currently-active version. Only "
+            "one version per template is active at a time. This is "
+            "administrative state, not version content."
+        ),
+    )
 
     created_by = models.ForeignKey(
         User,

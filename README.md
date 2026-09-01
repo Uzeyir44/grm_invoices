@@ -528,22 +528,27 @@ default bank account, IBAN).
 
 The second feature API built on the authentication and tenant-isolation
 foundations. It manages a company's document templates (`DocumentTemplate`):
-their **metadata** (Step 1) and their current **`.docx` file** (Step 2).
-Template **version history** and placeholder processing are later steps and are
-deliberately not exposed here. All endpoints are JWT-protected and tenant-scoped
-to `request.user.company`.
+their **metadata** (Step 1), their **`.docx` file** (Step 2), and their
+controlled **template variables** and immutable **version history** (Step 3).
+Actual placeholder *replacement*, DOCX generation and PDF generation are later
+steps and are deliberately not implemented here. All endpoints are
+JWT-protected and tenant-scoped to `request.user.company`.
 
 ### Endpoints
 
 ```text
-GET    /api/document-templates/                  list templates (tenant-scoped)
-POST   /api/document-templates/                  create a template
-GET    /api/document-templates/<id>/             retrieve a template
-PATCH  /api/document-templates/<id>/             update metadata / activate or deactivate
-DELETE /api/document-templates/<id>/             soft-delete a template
-GET    /api/document-templates/<id>/file/        download the template's .docx file
-POST   /api/document-templates/<id>/file/        upload / replace the .docx file
-DELETE /api/document-templates/<id>/file/        remove the template's file (not the template)
+GET    /api/document-templates/                        list templates (tenant-scoped)
+POST   /api/document-templates/                        create a template
+GET    /api/document-templates/<id>/                   retrieve a template
+PATCH  /api/document-templates/<id>/                   update metadata / activate or deactivate
+DELETE /api/document-templates/<id>/                   soft-delete a template
+GET    /api/document-templates/<id>/file/              download the template's .docx file
+POST   /api/document-templates/<id>/file/              upload / replace the .docx file
+DELETE /api/document-templates/<id>/file/              remove the template's file (not the template)
+GET    /api/document-templates/<id>/versions/          list the template's versions
+POST   /api/document-templates/<id>/versions/          create a new immutable version snapshot
+GET    /api/document-templates/<id>/versions/<vid>/    retrieve a specific version
+POST   /api/document-templates/<id>/versions/<vid>/activate/   activate a version
 ```
 
 - `GET /api/document-templates/` supports a `document_type` query parameter to
@@ -558,9 +563,9 @@ DELETE /api/document-templates/<id>/file/        remove the template's file (not
 
 `POST /api/document-templates/<id>/file/` accepts `multipart/form-data` with a
 single `file` part. Uploading to a template that already has a file **replaces**
-it: the previous file is removed from storage and the new one is written in its
-place (a template holds exactly one current file; versioning is a later step).
-The `document_templates.update` permission is required.
+the template's **current/working** file. Immutable history is captured by
+creating a version snapshot from this file (see Versioning below). The
+`document_templates.update` permission is required.
 
 File validation (in `DocumentTemplateFileSerializer`):
 
@@ -574,7 +579,8 @@ File validation (in `DocumentTemplateFileSerializer`):
 ```
 
 The extension/format check is deliberately lightweight — it does **not** parse
-placeholders or build a full DOCX parser (that belongs to a later step).
+placeholders or build a full DOCX parser (placeholder validation happens when a
+version is created).
 
 ### File retrieval
 
@@ -593,18 +599,79 @@ no file returns `404`.
 
 ### Permissions
 
-Seeded (data migration `authentication.0003`) permission codes:
+Seeded (data migrations `authentication.0003` and `authentication.0004`)
+permission codes:
 
 ```text
-document_templates.read    document_templates.create
-document_templates.update  document_templates.delete
+document_templates.read             document_templates.create
+document_templates.update           document_templates.delete
+document_templates.version_create   document_templates.version_activate
 ```
 
 Views require `IsCompanyMember` plus the code matching the HTTP method
 (`permission_required(...)` from the Step-2 foundation): `read` for list /
-retrieve / file download, `create` for POST, `update` for PATCH / file
-upload / file delete, `delete` for DELETE. Codes are granted to users through
-`Role` / `UserRole` as usual.
+retrieve / file download / version list / version retrieve, `create` for
+template POST, `update` for PATCH / file upload / file delete,
+`version_create` for `POST .../versions/`, `version_activate` for
+`POST .../versions/<vid>/activate/`, `delete` for DELETE. Codes are granted to
+users through `Role` / `UserRole` as usual.
+
+### Template variables (controlled placeholders)
+
+Templates may reference a **controlled** set of variables — no arbitrary
+Python/Django expressions are ever executed. The single authoritative catalog
+lives in `apps/document_templates/variables.py`, shared by validation (later
+Step 4 generation) so validation and resolution stay in sync.
+
+Supported namespaces and variables (all map to fields that actually exist in
+the current models):
+
+```text
+company.*    company.name, company.legal_name, company.voen,
+             company.registration_number
+client.*     client.name, client.voen, client.email, client.phone
+document.*   document.number, document.date, document.type
+```
+
+Placeholder syntax is exactly `{{ namespace.field }}`, e.g.
+`{{ company.name }}`, `{{ client.voen }}`, `{{ document.number }}`. Whitespace
+around the key and key casing are normalized.
+
+The validator (in `variables.py`) extracts placeholders from the template's
+actual text, normalizes them, and reports:
+
+- **valid** placeholders (recognized variable)
+- **invalid** placeholders (unknown variable, unknown field in a known
+  namespace, malformed syntax, or an expression / attribute chain such as
+  `{{ company.name.__class__ }}` or `{{ 1 + 1 }}`)
+
+Placeholder validation is **validation only** — nothing is ever replaced or
+executed. Replacement and generation are explicitly deferred (Step 4).
+
+### Versioning & activation
+
+Templates keep immutable version history in `TemplateVersion`. Each version is
+a snapshot of the working file; historical versions are never edited or
+deleted (their DB row is also INSERT-only in intent, with a fixed
+`version_number` unique per template and an immutable `company`).
+
+- `POST /api/document-templates/<id>/versions/` snapshots the template's
+  current `.docx` into a new `TemplateVersion` with version number
+  `(highest + 1)`. The template's actual document text is read and validated
+  first: unknown/malformed placeholders are rejected and no version is
+  recorded. Requires `document_templates.version_create`.
+- `GET /api/document-templates/<id>/versions/` lists the template's versions
+  (ascending version number).
+- `GET /api/document-templates/<id>/versions/<vid>/` retrieves one version.
+- `POST /api/document-templates/<id>/versions/<vid>/activate/` makes a version
+  the template's single active version. Only one version per template is
+  active at a time; activating one automatically deactivates the others.
+  Historical versions and their contents are preserved — activation only
+  moves the `is_active` pointer. Requires `document_templates.version_activate`.
+
+Version files are stored versioned (`templates/company_<id>/<template_id>/v<n>_<uuid>.docx`)
+so a new version never overwrites a historical one. `storage_path` is never
+exposed to clients — versions are served by URL through the serializer.
 
 ### Activation & deactivation
 
@@ -638,15 +705,24 @@ changes companies. Cross-company list/retrieve/update/delete all resolve to
 
 ### Tests
 
-`apps/document_templates/tests/test_api.py` (48 tests): access/RBAC matrix
-across the four permission codes, tenant isolation (list/retrieve/update/
-delete cross-company → 404), creation ownership and `company_id`-ignored,
-update and company immutability, activation/deactivation (including
-company-scoped), soft-deletion behaviour, and validation (required fields,
-invalid `document_type`, name length, list filter). The file feature adds
-upload of a valid `.docx`, invalid-type / non-ZIP / oversized rejection, file
-retrieval (own company OK, cross-company 404, no-file 404), replacement, file
-deletion, and tenant isolation for upload/replace/access/delete.
+`apps/document_templates/tests/test_api.py` covers the template metadata, file,
+and version API; `apps/document_templates/tests/test_variables.py` covers the
+placeholder validator (valid / unknown / malformed / expression placeholders).
+In total (73 tests for the app) the suite exercises: access/RBAC across the
+permission codes, tenant isolation (list/retrieve/update/delete/version
+cross-company → 404), creation ownership and `company_id`-ignored, update and
+company immutability, activation/deactivation, soft-deletion, file upload /
+invalid-type / oversized rejection / retrieval / replacement / deletion, and
+version creation / numbering / historical preservation / single-active /
+activation / cross-company isolation.
+
+### What is intentionally deferred
+
+```text
+Placeholder replacement ({{ client.name }} → value)  → Step 4
+Actual DOCX generation                                → Step 4
+PDF generation                                        → Step 4
+```
 
 ---
 
@@ -945,17 +1021,18 @@ Company
   storage later via the `STORAGES` setting. Files are stored per-template under
   `templates/company_<id>/<id>.docx`.
 - The table also stores metadata (`name`, `is_active`, timestamps, soft delete
-  via `deleted_at`). Versioned file history lives in
-  `TemplateVersion.storage_path` (a later step, not yet exposed through the
-  API).
+  via `deleted_at`).
 - There is an index optimized for `(company, document_type, is_active)`.
 - **`TemplateVersion`** is an immutable edition of a template's file. Old
   versions are never deleted or edited, so `template` uses `PROTECT`
   (`ON DELETE RESTRICT`) to preserve template history.
 - `version_number` is unique per template (unique constraint on
   `(template, version_number)`).
-- A version records its `storage_path`, an optional `checksum`, and the user
-  who created it (`created_by` → `User`, `SET_NULL`).
+- A version records a `file` `FileField` holding the immutable .docx snapshot,
+  `storage_path`, an optional `checksum`, and the user who created it
+  (`created_by` → `User`, `SET_NULL`). `is_active` marks the template's single
+  currently-active version (a pointer, not content). Placeholder validation is
+  run against the snapshot's actual text at version-creation time.
 - `TemplateVersion.company` is a **copy** of `DocumentTemplate.company` (same
   pattern as the client subtype tables): it exists to support a composite FK
   `(template_id, company_id)` → `document_templates(id, company_id)` and an
@@ -969,11 +1046,12 @@ Company
   express natively; these are added via the raw-SQL migration
   `apps/database/migrations/0002_raw_sql_constraints.py` (see below).
 - The **metadata** layer (create / list / retrieve / update / activate /
-  deactivate / soft-delete a template) and the **current `.docx` file**
-  (upload / replace / download / delete) are implemented as the Document
-  Template Management API (see [Document Template Management API](#document-template-management-api)).
-  Managing `TemplateVersion` history and placeholder processing is a later step
-  and is not yet exposed through the API.
+  deactivate / soft-delete a template), the **current `.docx` file** (upload /
+  replace / download / delete), and the **controlled variables + immutable
+  version history** (create / list / retrieve / activate a version) are
+  implemented as the Document Template Management API (see [Document Template
+  Management API](#document-template-management-api)). Placeholder replacement
+  and document/PDF generation are later steps and are not yet implemented.
 
 ## 6. Company Document Counters
 
