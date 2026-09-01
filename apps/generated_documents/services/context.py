@@ -152,7 +152,40 @@ def build_document_context(document):
     }
 
 
-def build_generation_context(company=None, client=None, document=None, *, require_client=True):
+def build_line_items_context(version):
+    """
+    Line-item portion of the context (the ``items`` collection + ``item.*``).
+
+    Items are taken from ``version.line_items`` (DocumentLineItem rows) in
+    ``line_number`` order. Each item is a flat dict of the approved ``item.*``
+    variable keys; numeric/derived fields are passed through for deterministic
+    formatting by the placeholder engine. Optional blank text fields resolve
+    to ``None`` (the project's empty-value convention).
+
+    A ``None`` version (document with no version snapshot) yields an empty
+    collection.
+    """
+    if version is None:
+        return []
+    items = version.line_items.order_by("line_number")
+    return [
+        {
+            "line_number": item.line_number,
+            "description": _empty(item.description),
+            "quantity": item.quantity,
+            "unit": _empty(item.unit),
+            "unit_price": item.unit_price,
+            "discount_percent": item.discount_percent,
+            "vat_rate_percent": item.vat_rate_percent,
+            "subtotal": item.subtotal,
+            "vat_amount": item.vat_amount,
+            "total": item.total,
+        }
+        for item in items
+    ]
+
+
+def build_generation_context(company=None, client=None, document=None, *, require_client=True, version=None):
     """
     Build the validated template data context for a generated document.
 
@@ -164,6 +197,10 @@ def build_generation_context(company=None, client=None, document=None, *, requir
         document: the GeneratedDocument being rendered.
         require_client: when True (default), a document with no client is a
                   hard error (client.name is a required variable).
+        version: the GeneratedDocumentVersion whose line items become the
+                  ``items`` collection. Defaults to the document's latest
+                  version (highest version_number), or an empty collection if
+                  the document has no version.
 
     Returns a nested dict::
 
@@ -171,6 +208,7 @@ def build_generation_context(company=None, client=None, document=None, *, requir
             "company":   {"name", "legal_name", "voen", "registration_number"},
             "client":    {"name", "voen", "email", "phone"},
             "document":  {"number", "date", "type"},
+            "items":     [ {"line_number", "description", "quantity", ...}, ... ],
         }
 
     Raises:
@@ -185,6 +223,22 @@ def build_generation_context(company=None, client=None, document=None, *, requir
 
     _assert_tenant_consistent(company, client, document)
 
+    if version is not None:
+        if version.generated_document_id != document.id:
+            raise GenerationContextError(
+                "The provided version does not belong to the document "
+                "(version/document mismatch)."
+            )
+        if version.company_id != document.company_id:
+            raise GenerationContextError(
+                "The provided version does not match the document's company "
+                "(tenant mismatch)."
+            )
+    else:
+        version = (
+            document.versions.order_by("-version_number").first()
+        )
+
     client_context = build_client_context(client)
     if require_client and client_context["name"] is None:
         raise GenerationContextError(
@@ -196,6 +250,7 @@ def build_generation_context(company=None, client=None, document=None, *, requir
         "company": build_company_context(company),
         "client": client_context,
         "document": build_document_context(document),
+        "items": build_line_items_context(version),
     }
 
 
@@ -203,10 +258,17 @@ def flat_context_keys(context):
     """
     All ``namespace.key`` keys present in a built context, e.g.
     ``{"company.name", "client.email", ...}``. Used to assert the variable
-    contract (the produced context only contains approved keys).
+    contract (the produced context only contains approved keys). The ``items``
+    collection contributes the ``item.*`` keys (from the first item, if any).
     """
     keys = set()
     for namespace, fields in context.items():
+        if isinstance(fields, list):
+            if fields:
+                obj = fields[0]
+                for field in obj:
+                    keys.add(f"{namespace}.{field}")
+            continue
         for field in fields:
             keys.add(f"{namespace}.{field}")
     return keys

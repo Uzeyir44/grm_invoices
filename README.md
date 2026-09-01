@@ -745,6 +745,9 @@ from the future placeholder engine, document generation, preview, and tests.
     "company": {"name", "legal_name", "voen", "registration_number"},
     "client":  {"name", "voen", "email", "phone"},
     "document": {"number", "date", "type"},
+    "items": [{"line_number", "description", "quantity", "unit",
+               "unit_price", "discount_percent", "vat_rate_percent",
+               "subtotal", "vat_amount", "total"}, ...],
 }
 ```
 
@@ -753,8 +756,10 @@ from the future placeholder engine, document generation, preview, and tests.
 The builder uses **only** the variables approved in Step 3
 (`apps/document_templates/variables.py`). No new variables are introduced;
 the produced context mirrors the `company.*` / `client.*` / `document.*`
-namespaces exactly. A tracked test asserts the built context contains exactly
-the approved keys (no `client.secret_field`, no `company.internal_id`, etc.).
+namespaces exactly and the `items` collection contributes the `item.*`
+variables (present only when the document has line items). A tracked test
+asserts the built context never introduces unapproved keys (no
+`client.secret_field`, no `company.internal_id`, etc.).
 
 ### Data sourcing
 
@@ -767,6 +772,10 @@ the approved keys (no `client.secret_field`, no `company.internal_id`, etc.).
   - `client.email`/`client.phone` come from the client's **primary contact**
 - **document.*** — from `GeneratedDocument`: number, date (ISO date of
   `created_at`), type (document type name).
+- **items** — line items from the document's `GeneratedDocumentVersion`
+  (default: the latest version) via `version.line_items`, in `line_number`
+  order. An explicit `version` may be passed; it must belong to the document.
+  A document with no version yields an empty `items` collection.
 
 ### Tenant safety
 
@@ -788,8 +797,7 @@ rather than silently mixing data from two tenants.
 ### What is intentionally deferred
 
 ```text
-Repeating line-item sections ({{#each items}}, loops) → next step
-DOCX generation / PDF generation                     → future step
+DOCX generation / PDF generation → future step
 ```
 
 ---
@@ -833,6 +841,7 @@ company.*    company.name, company.legal_name, company.voen,
              company.registration_number
 client.*     client.name, client.voen, client.email, client.phone
 document.*   document.number, document.date, document.type
+item.*       (inside repeating sections only) — see Repeating Line Items
 ```
 
 ### Value formatting
@@ -879,8 +888,94 @@ document is written to a separate output path/buffer.
 ### What is intentionally deferred
 
 ```text
-Repeating line-item sections ({{#each items}}, loops) → next step
-PDF generation                                        → future step
+Complete document-generation flow → Step 4.4 (next)
+PDF generation                   → future step
+```
+
+---
+
+## Document Generation — Repeating Line Items
+
+Step 4.3 of document generation: the placeholder engine supports **repeating
+line-item sections** so invoice/financial templates can render an arbitrary
+number of line items from the document's `DocumentLineItem` rows. This remains
+inside the same reusable service
+(`apps/generated_documents/services/placeholder_engine.py`); no API, no
+persistence workflow, and no PDF output yet.
+
+### Repeating-section syntax
+
+Controlled `{{#each items}} ... {{/each}}` markers — `items` is the *only*
+supported collection name and maps to the document's line items.
+
+```text
+{{#each items}}
+{{ item.description }} | {{ item.quantity }} | {{ item.unit_price }} | {{ item.total }}
+{{/each}}
+```
+
+Table rows use the same markers inside a single **prototype row**: the row's
+*first* cell starts with `{{#each items}}` and its *last* cell ends with
+`{{/each}}`, with the `{{ item.* }}` placeholders in the other cells.
+
+### The `items` collection and `item.*` variables
+
+The context builder (`services/context.py`) reads line items from a
+`GeneratedDocumentVersion` (defaulting to the document's latest version) in
+`line_number` order and exposes them as `context["items"]`, a list of items.
+Each item maps the `item.*` variables (all from the real `DocumentLineItem`
+model — nothing is invented):
+
+```text
+item.line_number    item.description    item.quantity    item.unit
+item.unit_price     item.discount_percent item.vat_rate_percent
+item.subtotal       item.vat_amount     item.total
+```
+
+`{{ item.* }}` is only valid inside a repeating section.
+
+### Table-row behavior
+
+The row containing the markers is the **prototype row**: it is cloned once per
+line item and the `{{#each items}}` / `{{/each}}` markers are stripped. The
+header row and totals rows remain unchanged, and the prototype row does not
+remain as an extra empty row.
+
+### Empty-collection behavior
+
+With zero line items (`items = []`), any repeating section produces **no
+rows/paragraphs** — the prototype row is removed and no `{{ item.* }}` residue
+is left behind.
+
+### Formatting preservation
+
+Cloned rows are deep copies of the prototype row's XML, so cell/paragraph/font
+formatting, borders and alignment are preserved. Only the marker text is
+stripped and the `{{ ... }}` placeholders replaced.
+
+### Security restrictions
+
+The template language remains data-only: no `eval`, no `exec`, no expression
+execution. Only the approved variables and the fixed `items` collection are
+resolved. `{{#each unknown_collection}}`, unbalanced/nested markers, and
+`{{ item.* }}` outside a section all raise
+`UnknownPlaceholderError` before anything is written.
+
+### What is intentionally deferred
+
+```text
+Nested loops / conditionals / filters / arbitrary expressions → not supported
+Complete document-generation flow                             → Step 4.4 (next)
+PDF generation                                                → future step
+```
+
+### Document generation roadmap
+
+```text
+4.1 Data Context Builder       ✅
+4.2 Placeholder Engine         ✅
+4.3 Repeating Line Items       ✅
+4.4 Complete Generation Flow  ← upcoming
 ```
 
 ---

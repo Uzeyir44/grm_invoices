@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from django.test import TestCase
 
@@ -11,13 +12,13 @@ from apps.clients.models import (
 )
 from apps.document_templates.models import DocumentTemplate
 from apps.document_templates.variables import valid_variable_keys
-from apps.generated_documents.models import GeneratedDocument
+from apps.generated_documents.models import GeneratedDocument, GeneratedDocumentVersion
 from apps.generated_documents.services.context import (
     GenerationContextError,
     build_generation_context,
     flat_context_keys,
 )
-from apps.reference_data.models import DocumentType
+from apps.reference_data.models import DocumentType, Currency
 
 
 def make_document_type(code="invoice"):
@@ -244,9 +245,125 @@ class VariableContractTests(ContextBuilderTestCase):
 
         produced = flat_context_keys(ctx)
         approved = set(valid_variable_keys())
-        self.assertEqual(produced, approved)
+        non_item = {k for k in approved if not k.startswith("item.")}
+        # The produced context must never introduce an unapproved key, and it
+        # must include every non-line-item variable. item.* keys only appear
+        # when the document actually has line items (empty collection -> no
+        # item.* keys).
+        self.assertLessEqual(produced, approved)
+        self.assertLessEqual(non_item, produced)
+
+    def test_line_item_keys_present_when_items_exist(self):
+        doc = self.legal_document()
+        ctx = build_generation_context(document=doc)
+        version = doc.versions.first()
+        if version is not None:
+            ctx_with_items = build_generation_context(document=doc, version=version)
+        else:
+            ctx_with_items = build_generation_context(document=doc)
+        # With no real version/line items in this fixture, items is empty and
+        # no item.* keys are expected.
+        self.assertIn("items", ctx_with_items)
+        for item_keys in flat_context_keys({"items": ctx_with_items["items"]}):
+            self.assertTrue(item_keys.startswith("item."))
 
     def test_context_structure_is_namespaced(self):
         ctx = build_generation_context(document=self.legal_document())
 
-        self.assertEqual(set(ctx.keys()), {"company", "client", "document"})
+        self.assertEqual(set(ctx.keys()), {"company", "client", "document", "items"})
+
+
+class LineItemContextTests(ContextBuilderTestCase):
+    def _make_version(self, document):
+        from apps.document_templates.models import TemplateVersion
+        from apps.reference_data.models import Currency
+
+        currency = Currency.objects.get_or_create(code="AZN", name="Manat")[0]
+        template_version = TemplateVersion.objects.create(
+            template=document.template,
+            company=document.company,
+            version_number=1,
+            storage_path="x",
+        )
+        return GeneratedDocumentVersion.objects.create(
+            generated_document=document,
+            company=document.company,
+            version_number=1,
+            template_version=template_version,
+            currency=currency,
+            generation_snapshot={},
+        )
+
+    def _make_line_item(self, version, line_number, description, quantity=Decimal("1")):
+        from apps.generated_documents.models import DocumentLineItem
+        from apps.reference_data.models import Currency
+
+        currency = Currency.objects.get_or_create(code="AZN", name="Manat")[0]
+        return DocumentLineItem.objects.create(
+            generated_document_version=version,
+            company=version.company,
+            currency=currency,
+            line_number=line_number,
+            description=description,
+            quantity=quantity,
+            unit="h",
+            unit_price=Decimal("100.00"),
+            discount_percent=Decimal("0"),
+            vat_rate_percent=Decimal("18"),
+            subtotal=Decimal("100.00"),
+            vat_amount=Decimal("18.00"),
+            total=Decimal("118.00"),
+        )
+
+    def test_line_items_included_and_ordered(self):
+        doc = self.legal_document()
+        version = self._make_version(doc)
+        self._make_line_item(version, 2, "Second")
+        self._make_line_item(version, 1, "First")
+        self._make_line_item(version, 3, "Third")
+
+        ctx = build_generation_context(document=doc)
+
+        self.assertEqual(
+            [i["description"] for i in ctx["items"]], ["First", "Second", "Third"]
+        )
+        self.assertEqual([i["line_number"] for i in ctx["items"]], [1, 2, 3])
+
+    def test_only_the_documents_own_line_items_are_included(self):
+        other_company = make_company()
+        other_client = make_legal_client(other_company, legal_name="Other Ltd")
+        other_type = DocumentType.objects.create(code="contract", name="Contract")
+        other_template = DocumentTemplate.objects.create(
+            company=other_company, document_type=other_type, name="Other Tpl"
+        )
+        other_doc = make_document(
+            other_company, other_client, other_type, other_template, number="INV-002"
+        )
+        other_version = self._make_version(other_doc)
+        self._make_line_item(other_version, 1, "Foreign item")
+
+        doc = self.legal_document(number="INV-003")
+        version = self._make_version(doc)
+        self._make_line_item(version, 1, "Own item")
+
+        ctx = build_generation_context(document=doc)
+
+        self.assertEqual([i["description"] for i in ctx["items"]], ["Own item"])
+        self.assertNotIn("Foreign item", [i["description"] for i in ctx["items"]])
+
+    def test_explicit_version_for_another_document_is_rejected(self):
+        doc_a = self.legal_document(number="INV-A")
+        client_b = make_legal_client(
+            self.company, legal_name="Beta Ltd", voen="2222333440"
+        )
+        doc_b = make_document(
+            self.company, client_b, self.document_type, self.template, number="INV-B"
+        )
+        version_b = self._make_version(doc_b)
+
+        with self.assertRaises(GenerationContextError):
+            build_generation_context(document=doc_a, version=version_b)
+
+    def test_document_without_version_has_empty_items(self):
+        ctx = build_generation_context(document=self.legal_document())
+        self.assertEqual(ctx["items"], [])

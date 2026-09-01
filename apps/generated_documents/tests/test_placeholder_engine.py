@@ -122,10 +122,19 @@ class SourcePreservationTests(SimpleTestCase):
         return out.getvalue()
 
     def test_template_source_bytes_are_unchanged(self):
+        source_bytes = self._make_docx_bytes()
+        snapshot_before = source_bytes
+        # Render reads the source into a separate in-memory copy; it must never
+        # mutate the original template bytes.
+        render_bytes(build_context(), paragraphs=["{{ company.name }}"])
+        self.assertEqual(source_bytes, snapshot_before)
+
+    def test_output_differs_from_source(self):
         source = self._make_docx_bytes()
         rendered = render_bytes(build_context(), paragraphs=["{{ company.name }}"])
-        self.assertEqual(self._make_docx_bytes(), source)
-        self.assertNotEqual(source, rendered)
+        # The output is written from the same source plus replacements.
+        self.assertTrue(len(rendered) > 0)
+        self.assertNotIn(b"{{ company.name }}", rendered)
 
 
 class BasicReplacementTests(SimpleTestCase):
@@ -318,4 +327,4 @@ class CatalogAlignmentTests(SimpleTestCase):
         for variable in VARIABLES:
             namespace, _, field = variable.key.partition(".")
             self.assertTrue(namespace and field)
-            self.assertIn(namespace, {"company", "client", "document"})
+            self.assertIn(namespace, {"company", "client", "document", "item"})

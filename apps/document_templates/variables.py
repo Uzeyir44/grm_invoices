@@ -74,7 +74,24 @@ VARIABLES = [
     TemplateVariable("document.number", "Document number", "document.document_number", "string", required=True),
     TemplateVariable("document.date", "Document date", "document.created_at", "date", required=True),
     TemplateVariable("document.type", "Document type", "document.document_type.name", "string", required=True),
+    # item.* — inside {{#each items}} repeating sections only; resolved from
+    # DocumentLineItem (the line items of a GeneratedDocumentVersion).
+    TemplateVariable("item.line_number", "Line number", "item.line_number", "integer"),
+    TemplateVariable("item.description", "Description", "item.description", "string"),
+    TemplateVariable("item.quantity", "Quantity", "item.quantity", "decimal"),
+    TemplateVariable("item.unit", "Unit", "item.unit", "decimal"),
+    TemplateVariable("item.unit_price", "Unit price", "item.unit_price", "decimal"),
+    TemplateVariable("item.discount_percent", "Discount percent", "item.discount_percent", "decimal"),
+    TemplateVariable("item.vat_rate_percent", "VAT rate percent", "item.vat_rate_percent", "decimal"),
+    TemplateVariable("item.subtotal", "Subtotal", "item.subtotal", "decimal"),
+    TemplateVariable("item.vat_amount", "VAT amount", "item.vat_amount", "decimal"),
+    TemplateVariable("item.total", "Total", "item.total", "decimal"),
 ]
+
+# The name of the repeating collection provided by the generation context.
+# ``{{#each items}}`` iterates the document's line items; each iteration
+# exposes the ``item.*`` variables above.
+EACH_COLLECTION = "items"
 
 # Fast lookup keyed by the placeholder key.
 VARIABLE_BY_KEY = {v.key: v for v in VARIABLES}
