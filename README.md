@@ -788,8 +788,99 @@ rather than silently mixing data from two tenants.
 ### What is intentionally deferred
 
 ```text
-Placeholder replacement / DOCX fill   → Step 4.2
-DOCX generation / PDF generation      → future step
+Repeating line-item sections ({{#each items}}, loops) → next step
+DOCX generation / PDF generation                     → future step
+```
+
+---
+
+## Document Generation — Placeholder Replacement Engine
+
+Step 4.2 of document generation: a reusable, dependency-light service that
+takes an existing `.docx` template and the validated context from Step 4.1 and
+produces a separate output `.docx` with every supported placeholder replaced
+by its value. It lives in
+`apps/generated_documents/services/placeholder_engine.py` and is independent
+of HTTP views.
+
+### Placeholder syntax
+
+Only the `{{ path }}` form is recognized:
+
+```text
+{{ company.name }}
+{{ client.voen }}
+{{ document.number }}
+```
+
+Whitespace and key casing are normalized, so `{{client.name}}`,
+`{{ client.name }}` and `{{   Company.Name   }}` all resolve to the same
+variable.
+
+### How placeholders are resolved
+
+The engine uses **only** the single authoritative variable catalog in
+`apps/document_templates/variables.py` (the same source Step 3 validation
+uses) — it does not maintain its own list. Each `{{ namespace.field }}` key is
+looked up as `context["namespace"]["field"]` against the Step 4.1 context.
+There is no `eval`, no attribute traversal, and no placeholder is ever
+executed as code.
+
+### Supported namespaces
+
+```text
+company.*    company.name, company.legal_name, company.voen,
+             company.registration_number
+client.*     client.name, client.voen, client.email, client.phone
+document.*   document.number, document.date, document.type
+```
+
+### Value formatting
+
+Values are converted deterministically: `None` → empty string, `date` /
+`datetime` → ISO date (`YYYY-MM-DD`), `Decimal` → no trailing zeros, everything
+else → its string form. No localization/currency formatting yet.
+
+### Missing-value behavior
+
+- **Optional** variables with no value (e.g. `{{ client.phone }}`) resolve to
+  the empty string and never crash generation.
+- **Required** variables (`client.name`, `document.number`/`date`/`type`) with
+  no value raise `MissingRequiredValueError` instead of silently producing an
+  incorrect document.
+
+### Unknown-variable behavior
+
+A malformed or unsupported placeholder (e.g. `{{ client.unknown_field }}`,
+`{{ some_random_variable }}`, an expression like `{{ company.name.__class__ }}`)
+raises `UnknownPlaceholderError`. It is never replaced or executed. The whole
+document is validated before any replacement, so all problems are reported at
+once and no output is produced when validation fails.
+
+### DOCX locations currently supported
+
+Normal body paragraphs, table cells (including nested tables), and existing
+headers/footers. Only header/footer parts the template already contains are
+processed — no empty parts are created.
+
+### Split runs
+
+DOCX text is commonly divided into multiple runs; a placeholder such as
+`{{ client.name }}` may be split across them. The engine concatenates each
+paragraph's run text to locate placeholders and rewrites only the affected
+runs, so split placeholders are replaced while surrounding formatting is
+preserved.
+
+### Original template is preserved
+
+The source template is opened read-only and never overwritten; the rendered
+document is written to a separate output path/buffer.
+
+### What is intentionally deferred
+
+```text
+Repeating line-item sections ({{#each items}}, loops) → next step
+PDF generation                                        → future step
 ```
 
 ---
