@@ -719,9 +719,77 @@ activation / cross-company isolation.
 ### What is intentionally deferred
 
 ```text
-Placeholder replacement ({{ client.name }} → value)  → Step 4
-Actual DOCX generation                                → Step 4
-PDF generation                                        → Step 4
+Placeholder replacement ({{ client.name }} → value)  → Step 4.2
+Actual DOCX generation                                → Step 4.x
+PDF generation                                        → Step 4.x
+Data context builder for generation                    → Step 4.1 (below)
+```
+
+---
+
+## Document Generation — Data Context Builder
+
+Step 4.1 of document generation: a reusable backend service that collects the
+data required to fill a template and converts it into the **controlled
+template-variable context** defined in Step 3. It is consumed later by the
+placeholder replacement engine.
+
+The service lives in `apps/generated_documents/services/context.py` and is
+independent of HTTP views — it takes plain model instances and is callable
+from the future placeholder engine, document generation, preview, and tests.
+
+### Context structure
+
+```python
+{
+    "company": {"name", "legal_name", "voen", "registration_number"},
+    "client":  {"name", "voen", "email", "phone"},
+    "document": {"number", "date", "type"},
+}
+```
+
+### Variable contract
+
+The builder uses **only** the variables approved in Step 3
+(`apps/document_templates/variables.py`). No new variables are introduced;
+the produced context mirrors the `company.*` / `client.*` / `document.*`
+namespaces exactly. A tracked test asserts the built context contains exactly
+the approved keys (no `client.secret_field`, no `company.internal_id`, etc.).
+
+### Data sourcing
+
+- **company.*** — from the `Company` row (display name, legal name, VOEN,
+  registration number). The tenant is `document.company` unless an explicit
+  company is passed.
+- **client.*** — resolved from the `Client` subtype rows:
+  - legal entity → `client.name` = `legal_name`, `client.voen` = `legal_entity.voen`
+  - individual → `client.name` = `first [middle] last` name, `client.voen` = `None`
+  - `client.email`/`client.phone` come from the client's **primary contact**
+- **document.*** — from `GeneratedDocument`: number, date (ISO date of
+  `created_at`), type (document type name).
+
+### Tenant safety
+
+Before building the context the builder verifies (defense-in-depth, in
+addition to the API-level isolation) that `company`, `client` and `document`
+all belong to the same company. A mismatch raises `GenerationContextError`
+rather than silently mixing data from two tenants.
+
+### Missing values
+
+- Optional data (company VOEN / registration number, client VOEN for
+  individuals, email, phone, …) resolves to `None` and never crashes the
+  builder.
+- Required data (client name, document number/date/type) that cannot be
+  resolved fails with a clear `GenerationContextError` — e.g. a document with
+  no client cannot satisfy the required `client.name` unless `require_client`
+  is disabled.
+
+### What is intentionally deferred
+
+```text
+Placeholder replacement / DOCX fill   → Step 4.2
+DOCX generation / PDF generation      → future step
 ```
 
 ---
