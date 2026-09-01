@@ -167,6 +167,10 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# Maximum allowed size (bytes) for an uploaded document template file.
+# Templates are .docx only; the limit is checked at the API layer.
+MAX_TEMPLATE_FILE_SIZE = int(env("MAX_TEMPLATE_FILE_SIZE", 5 * 1024 * 1024))
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 

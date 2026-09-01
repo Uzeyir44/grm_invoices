@@ -1,5 +1,6 @@
 import uuid
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
 from rest_framework import status
@@ -40,6 +41,10 @@ class DocumentTemplateAPITestCase(APITestCase):
 
     def auth(self, user):
         self.client.force_authenticate(user=user)
+        return self.client
+
+    def deauth(self):
+        self.client.force_authenticate(user=None)
         return self.client
 
     def template_payload(self, **overrides):
@@ -388,3 +393,249 @@ class DocumentTemplateValidationTests(DocumentTemplateAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         names = {row["name"] for row in response.json()}
         self.assertEqual(names, {"Contract"})
+
+
+class DocumentTemplateFileAPITestCase(DocumentTemplateAPITestCase):
+    ALL = ALL_DOCUMENT_TEMPLATE_PERMISSIONS
+
+    def template_file_url(self, template_id):
+        return reverse("document-template-file", kwargs={"pk": template_id})
+
+    def make_docx(self, content=b"hello world", name="tpl.docx"):
+        from io import BytesIO
+        from zipfile import ZIP_DEFLATED, ZipFile
+
+        buf = BytesIO()
+        with ZipFile(buf, "w", ZIP_DEFLATED) as z:
+            z.writestr("[Content_Types].xml", content)
+            z.writestr("_rels/.rels", content)
+            z.writestr("word/document.xml", content)
+        buf.seek(0)
+        return SimpleUploadedFile(name, buf.read(), content_type="application/octet-stream")
+
+
+class DocumentTemplateFileUploadTests(DocumentTemplateFileAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.grant(self.alice, *self.ALL)
+        self.template = self.make_template_row(self.company_a, name="File Template")
+
+    def upload(self, **kwargs):
+        url = self.template_file_url(self.template.id)
+        return self.client.post(url, kwargs, format="multipart")
+
+    def test_authorized_user_can_upload_valid_docx(self):
+        self.auth(self.alice)
+        docx = self.make_docx()
+        response = self.upload(file=docx)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.template.refresh_from_db()
+        self.assertIsNotNone(self.template.file)
+        self.assertTrue(self.template.file.name.endswith(".docx"))
+        self.template.file.delete(save=False)
+
+    def test_upload_requires_file_field(self):
+        self.auth(self.alice)
+        response = self.upload()
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_invalid_file_type_is_rejected(self):
+        self.auth(self.alice)
+        bad = SimpleUploadedFile(
+            "tpl.pdf", b"%PDF-1.4", content_type="application/pdf"
+        )
+        response = self.upload(file=bad)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("docx", response.content.decode().lower())
+
+    def test_non_zip_docx_is_rejected(self):
+        self.auth(self.alice)
+        not_zip = SimpleUploadedFile(
+            "tpl.docx", b"this is not a real zip at all", content_type="application/octet-stream"
+        )
+        response = self.upload(file=not_zip)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_oversized_file_is_rejected(self):
+        from django.conf import settings
+
+        self.auth(self.alice)
+        # Size check runs before the zip validation, so a raw oversized blob
+        # named .docx is rejected purely on size.
+        big = SimpleUploadedFile(
+            "tpl.docx",
+            b"x" * (settings.MAX_TEMPLATE_FILE_SIZE + 1),
+            content_type="application/octet-stream",
+        )
+        response = self.upload(file=big)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_upload_requires_update_permission(self):
+        self.deauth()
+        self.grant(self.bob, "document_templates.read")
+        self.auth(self.bob)
+        response = self.upload(file=self.make_docx())
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_upload_is_rejected(self):
+        response = self.upload(file=self.make_docx())
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class DocumentTemplateFileReplacementTests(DocumentTemplateFileAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.grant(self.alice, *self.ALL)
+        self.template = self.make_template_row(self.company_a, name="Replace Template")
+        self.auth(self.alice)
+        self.first = self.client.post(
+            self.template_file_url(self.template.id),
+            {"file": self.make_docx(b"first version")},
+            format="multipart",
+        ).json()
+        self.template.refresh_from_db()
+        self.original_path = self.template.file.name
+
+    def test_upload_replaces_previous_file(self):
+        with self.original_path and self.template.file.open("rb") as f:
+            old_content = f.read()
+        response = self.client.post(
+            self.template_file_url(self.template.id),
+            {"file": self.make_docx(b"second version")},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.template.refresh_from_db()
+        self.assertIsNotNone(self.template.file)
+        self.template.file.open("rb")
+        new_content = self.template.file.read()
+        self.assertNotEqual(new_content, old_content)
+        # The stored file is rewritten in place (single current file, no
+        # versioning yet), so the path stays the same but the bytes changed.
+        self.template.file.close()
+        self.template.file.delete(save=False)
+
+
+class DocumentTemplateFileRetrievalTests(DocumentTemplateFileAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.grant(self.alice, *self.ALL)
+        self.grant(self.carol, *self.ALL)
+        self.template = self.make_template_row(self.company_a, name="Download Template")
+        self.auth(self.alice)
+        self.content = b"downloadable template content"
+        self.client.post(
+            self.template_file_url(self.template.id),
+            {"file": self.make_docx(self.content)},
+            format="multipart",
+        )
+        self.template.refresh_from_db()
+
+    def test_authorized_company_member_can_download_file(self):
+        self.auth(self.alice)
+        self.template.refresh_from_db()
+        with self.template.file.open("rb") as f:
+            stored = f.read()
+        response = self.client.get(self.template_file_url(self.template.id))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("attachment", response.get("Content-Disposition", ""))
+        self.assertEqual(b"".join(response.streaming_content), stored)
+
+    def test_other_company_cannot_download_file(self):
+        self.auth(self.carol)
+        response = self.client.get(self.template_file_url(self.template.id))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_download_requires_read_permission(self):
+        self.grant(self.bob, "document_templates.update")
+        self.auth(self.bob)
+        response = self.client.get(self.template_file_url(self.template.id))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_download_when_no_file_returns_404(self):
+        no_file = self.make_template_row(self.company_a, name="Empty Template")
+        self.auth(self.alice)
+        response = self.client.get(self.template_file_url(no_file.id))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class DocumentTemplateFileDeletionTests(DocumentTemplateFileAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.grant(self.alice, *self.ALL)
+        self.template = self.make_template_row(self.company_a, name="Delete Template")
+        self.auth(self.alice)
+        self.client.post(
+            self.template_file_url(self.template.id),
+            {"file": self.make_docx(b"to be deleted")},
+            format="multipart",
+        )
+        self.template.refresh_from_db()
+
+    def test_delete_removes_file_but_keeps_template(self):
+        self.auth(self.alice)
+        response = self.client.delete(self.template_file_url(self.template.id))
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.template.refresh_from_db()
+        # The FieldFile reloaded from an empty DB value is falsy.
+        self.assertFalse(bool(self.template.file))
+
+    def test_delete_when_no_file_returns_404(self):
+        empty = self.make_template_row(self.company_a, name="Empty Delete Template")
+        self.auth(self.alice)
+        response = self.client.delete(self.template_file_url(empty.id))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_tenant_cannot_delete_other_company_file(self):
+        self.grant(self.carol, *self.ALL)
+        self.auth(self.carol)
+        url = self.template_file_url(self.template.id)
+        self.assertEqual(self.client.delete(url).status_code, status.HTTP_404_NOT_FOUND)
+        self.template.refresh_from_db()
+        self.assertIsNotNone(self.template.file)
+
+
+class DocumentTemplateFileTenantIsolationTests(DocumentTemplateFileAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.grant(self.alice, *self.ALL)
+        self.grant(self.carol, *self.ALL)
+        self.other = self.make_template_row(self.company_b, name="Company B Template")
+
+    def test_company_a_cannot_upload_to_company_b_template(self):
+        self.auth(self.alice)
+        response = self.client.post(
+            self.template_file_url(self.other.id),
+            {"file": self.make_docx()},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_company_a_cannot_replace_company_b_file(self):
+        self.auth(self.carol)
+        self.client.post(
+            self.template_file_url(self.other.id),
+            {"file": self.make_docx(b"b content")},
+            format="multipart",
+        )
+        self.other.refresh_from_db()
+        self.auth(self.alice)
+        response = self.client.post(
+            self.template_file_url(self.other.id),
+            {"file": self.make_docx(b"a content")},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.other.refresh_from_db()
+        self.assertIsNotNone(self.other.file)
+
+    def test_company_a_cannot_access_company_b_file(self):
+        self.auth(self.carol)
+        self.client.post(
+            self.template_file_url(self.other.id),
+            {"file": self.make_docx()},
+            format="multipart",
+        )
+        self.auth(self.alice)
+        response = self.client.get(self.template_file_url(self.other.id))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

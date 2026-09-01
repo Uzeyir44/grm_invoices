@@ -527,19 +527,23 @@ default bank account, IBAN).
 ## Document Template Management API
 
 The second feature API built on the authentication and tenant-isolation
-foundations. It manages the **metadata** of a company's document templates
-(`DocumentTemplate`); the template **files** and `TemplateVersion` history are
-a later step and are deliberately not exposed here. All endpoints are
-JSON-only, JWT-protected, and tenant-scoped to `request.user.company`.
+foundations. It manages a company's document templates (`DocumentTemplate`):
+their **metadata** (Step 1) and their current **`.docx` file** (Step 2).
+Template **version history** and placeholder processing are later steps and are
+deliberately not exposed here. All endpoints are JWT-protected and tenant-scoped
+to `request.user.company`.
 
 ### Endpoints
 
 ```text
-GET    /api/document-templates/              list templates (tenant-scoped)
-POST   /api/document-templates/              create a template
-GET    /api/document-templates/<id>/         retrieve a template
-PATCH  /api/document-templates/<id>/         update metadata / activate or deactivate
-DELETE /api/document-templates/<id>/         soft-delete a template
+GET    /api/document-templates/                  list templates (tenant-scoped)
+POST   /api/document-templates/                  create a template
+GET    /api/document-templates/<id>/             retrieve a template
+PATCH  /api/document-templates/<id>/             update metadata / activate or deactivate
+DELETE /api/document-templates/<id>/             soft-delete a template
+GET    /api/document-templates/<id>/file/        download the template's .docx file
+POST   /api/document-templates/<id>/file/        upload / replace the .docx file
+DELETE /api/document-templates/<id>/file/        remove the template's file (not the template)
 ```
 
 - `GET /api/document-templates/` supports a `document_type` query parameter to
@@ -547,8 +551,45 @@ DELETE /api/document-templates/<id>/         soft-delete a template
 - A template is created from the metadata fields only:
   `document_type` (the shared lookup id), `name`, and optionally `is_active`
   (defaults to `true`).
-- Status codes follow DRF conventions: 201 on create, 204 on delete,
+- Status codes follow DRF conventions: 201 on create/upload, 204 on delete,
   400 / 401 / 403 / 404 as appropriate.
+
+### File upload & replacement
+
+`POST /api/document-templates/<id>/file/` accepts `multipart/form-data` with a
+single `file` part. Uploading to a template that already has a file **replaces**
+it: the previous file is removed from storage and the new one is written in its
+place (a template holds exactly one current file; versioning is a later step).
+The `document_templates.update` permission is required.
+
+File validation (in `DocumentTemplateFileSerializer`):
+
+```text
+- a file part is required
+- only .docx is accepted (extension checked)
+- the size must not exceed MAX_TEMPLATE_FILE_SIZE (default 5 MB; overridable
+  via the MAX_TEMPLATE_FILE_SIZE env var)
+- the upload must be a real OOXML/Word package: it must be a valid ZIP archive
+  exposing the standard members ([Content_Types].xml, word/document.xml, ...)
+```
+
+The extension/format check is deliberately lightweight — it does **not** parse
+placeholders or build a full DOCX parser (that belongs to a later step).
+
+### File retrieval
+
+`GET /api/document-templates/<id>/file/` streams the stored bytes back as an
+attachment (`Content-Disposition: attachment`). The template's storage path is
+never exposed to clients; the API returns the file content only. Requires
+`document_templates.read`. A request for a template with no file returns `404`
+Not Found.
+
+### File deletion
+
+`DELETE /api/document-templates/<id>/file/` removes the template's file from
+storage and clears the field — it does **not** delete the `DocumentTemplate`
+row. Requires `document_templates.update`. Deleting the file of a template with
+no file returns `404`.
 
 ### Permissions
 
@@ -560,9 +601,10 @@ document_templates.update  document_templates.delete
 ```
 
 Views require `IsCompanyMember` plus the code matching the HTTP method
-(`permission_required(...)` from the Step-2 foundation): `read` for list and
-retrieve, `create` for POST, `update` for PATCH, `delete` for DELETE. Codes are
-granted to users through `Role` / `UserRole` as usual.
+(`permission_required(...)` from the Step-2 foundation): `read` for list /
+retrieve / file download, `create` for POST, `update` for PATCH / file
+upload / file delete, `delete` for DELETE. Codes are granted to users through
+`Role` / `UserRole` as usual.
 
 ### Activation & deactivation
 
@@ -596,12 +638,15 @@ changes companies. Cross-company list/retrieve/update/delete all resolve to
 
 ### Tests
 
-`apps/document_templates/tests/test_api.py` (30 tests): access/RBAC matrix
+`apps/document_templates/tests/test_api.py` (48 tests): access/RBAC matrix
 across the four permission codes, tenant isolation (list/retrieve/update/
 delete cross-company → 404), creation ownership and `company_id`-ignored,
 update and company immutability, activation/deactivation (including
 company-scoped), soft-deletion behaviour, and validation (required fields,
-invalid `document_type`, name length, list filter).
+invalid `document_type`, name length, list filter). The file feature adds
+upload of a valid `.docx`, invalid-type / non-ZIP / oversized rejection, file
+retrieval (own company OK, cross-company 404, no-file 404), replacement, file
+deletion, and tenant isolation for upload/replace/access/delete.
 
 ---
 
@@ -894,10 +939,15 @@ Company
 - **`DocumentTemplate`** represents a company's template for a given document
   type (consulting contract, invoice, etc.). It references the shared
   `DocumentType` lookup table.
-- A template's actual file lives on disk/object storage; the
-  `DocumentTemplate` table stores only metadata (`name`, `is_active`,
-  timestamps, soft delete via `deleted_at`), with the storage location held in
-  `TemplateVersion.storage_path`.
+- The template's current file is stored in a `file` `FileField` (a `.docx`,
+  uploaded via the file API), persisted through Django's standard storage —
+  `FileSystemStorage` under `MEDIA_ROOT` in development, swappable to object
+  storage later via the `STORAGES` setting. Files are stored per-template under
+  `templates/company_<id>/<id>.docx`.
+- The table also stores metadata (`name`, `is_active`, timestamps, soft delete
+  via `deleted_at`). Versioned file history lives in
+  `TemplateVersion.storage_path` (a later step, not yet exposed through the
+  API).
 - There is an index optimized for `(company, document_type, is_active)`.
 - **`TemplateVersion`** is an immutable edition of a template's file. Old
   versions are never deleted or edited, so `template` uses `PROTECT`
@@ -919,10 +969,11 @@ Company
   express natively; these are added via the raw-SQL migration
   `apps/database/migrations/0002_raw_sql_constraints.py` (see below).
 - The **metadata** layer (create / list / retrieve / update / activate /
-  deactivate / soft-delete a template) is implemented as the Document Template
-  Management API (see [Document Template Management API](#document-template-management-api)).
-  Managing template **files** and `TemplateVersion` history is a later step and
-  is not yet exposed through the API.
+  deactivate / soft-delete a template) and the **current `.docx` file**
+  (upload / replace / download / delete) are implemented as the Document
+  Template Management API (see [Document Template Management API](#document-template-management-api)).
+  Managing `TemplateVersion` history and placeholder processing is a later step
+  and is not yet exposed through the API.
 
 ## 6. Company Document Counters
 

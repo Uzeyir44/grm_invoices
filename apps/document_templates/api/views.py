@@ -1,13 +1,19 @@
 from django.db import IntegrityError
 from django.utils import timezone
 
+from django.http import FileResponse
+
 from rest_framework import status
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.authentication.api.permissions import IsCompanyMember, permission_required
 from apps.authentication.tenant import get_tenant_object_or_404, tenant_queryset
-from apps.document_templates.api.serializers import DocumentTemplateSerializer
+from apps.document_templates.api.serializers import (
+    DocumentTemplateFileSerializer,
+    DocumentTemplateSerializer,
+)
 from apps.document_templates.models import DocumentTemplate
 
 
@@ -109,4 +115,78 @@ class DocumentTemplateDetailView(MethodPermissionAPIView):
         template = template_object_or_404(request, pk)
         template.deleted_at = timezone.now()
         template.save(update_fields=["deleted_at"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class DocumentTemplateFileView(MethodPermissionAPIView):
+    """
+    Manage the single current .docx file of a template (versioning is a
+    later step, so each template holds exactly one file and uploading
+    replaces it).
+
+      GET    -> download the template file
+      POST   -> upload / replace the template file
+      DELETE -> remove the template file (not the template row)
+
+    All operations are tenant-scoped and require the RBAC permission matching
+    the method. A template file path is never exposed to clients; retrieval
+    streams the bytes back.
+    """
+
+    parser_classes = [MultiPartParser, FormParser]
+    method_permissions = {
+        "GET": "document_templates.read",
+        "POST": "document_templates.update",
+        "DELETE": "document_templates.update",
+    }
+
+    def get(self, request, pk):
+        template = template_object_or_404(request, pk)
+        if not template.file:
+            return Response(
+                {"detail": "This template has no file uploaded yet."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return FileResponse(
+            template.file.open("rb"),
+            as_attachment=True,
+            filename="template.docx",
+            content_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+        )
+
+    def post(self, request, pk):
+        template = template_object_or_404(request, pk)
+        serializer = DocumentTemplateFileSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if template.file:
+            # Close any open handle first so Windows can release the lock
+            # before the underlying file is removed / overwritten.
+            template.file.close()
+            template.file.delete(save=False)
+        template.file = serializer.validated_data["file"]
+        template.save(update_fields=["file", "updated_at"])
+        return Response(
+            {
+                "id": template.id,
+                "file": template.file.url if template.file else None,
+                "file_name": template.file.name if template.file else None,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request, pk):
+        template = template_object_or_404(request, pk)
+        if not template.file:
+            return Response(
+                {"detail": "This template has no file uploaded yet."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        # Close any open handle first so Windows releases the file lock.
+        template.file.close()
+        template.file.delete(save=False)
+        template.file = None
+        template.save(update_fields=["file", "updated_at"])
         return Response(status=status.HTTP_204_NO_CONTENT)

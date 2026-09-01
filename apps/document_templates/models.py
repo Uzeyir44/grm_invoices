@@ -5,11 +5,27 @@ from apps.reference_data.models import DocumentType
 from apps.authentication.models import User
 
 
+def template_file_upload_path(instance, filename):
+    """
+    Store each template's current file under a company-scoped, template-keyed
+    path: templates/company_<id>/<template_id>.docx. The extension is ignored
+    and always forced to .docx (the only supported format), so a malicious
+    filename cannot smuggle a different extension into storage.
+    """
+    return f"templates/company_{instance.company_id}/{instance.id}.docx"
+
+
 class DocumentTemplate(models.Model):
     """
     A company's template for a given document type (consulting contract,
-    invoice, etc.). The actual template FILE lives on disk/object storage —
-    this table only stores metadata; see TemplateVersion.storage_path.
+    invoice, etc.). The actual template FILE lives in `file`, stored via
+    Django's configured storage (FileSystemStorage in development, swappable
+    to object storage later). The table also stores metadata (`name`,
+    `is_active`, timestamps, soft delete via `deleted_at`).
+
+    File / version history (TemplateVersion) is a later step; for now each
+    template holds exactly one current file, and uploading a new one replaces
+    it.
 
     NOT MODELED HERE (raw-SQL migration, deferred with the rest):
       - UNIQUE(id, company_id) — needed as a composite-FK target for
@@ -29,6 +45,13 @@ class DocumentTemplate(models.Model):
 
     name = models.CharField(max_length=200)
     is_active = models.BooleanField(default=True)
+    file = models.FileField(
+        upload_to=template_file_upload_path,
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="The template's current .docx file.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
