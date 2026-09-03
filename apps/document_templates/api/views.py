@@ -10,6 +10,11 @@ from rest_framework.views import APIView
 
 from apps.authentication.api.permissions import IsCompanyMember, permission_required
 from apps.authentication.tenant import get_tenant_object_or_404, tenant_queryset
+from apps.audit_logs.services import (
+    create_audit_log,
+    diff_snapshots,
+    request_metadata,
+)
 from apps.document_templates.api.serializers import (
     DocumentTemplateFileSerializer,
     DocumentTemplateSerializer,
@@ -60,6 +65,24 @@ def template_object_or_404(request, pk):
     )
 
 
+def _template_snapshot(template):
+    """Small business snapshot of a template for audit events."""
+    return {
+        "name": template.name,
+        "document_type_id": template.document_type_id,
+        "is_active": template.is_active,
+    }
+
+
+def _template_version_snapshot(version):
+    """Small business snapshot of a template version for audit events."""
+    return {
+        "template_id": version.template_id,
+        "version_number": version.version_number,
+        "is_active": version.is_active,
+    }
+
+
 class DocumentTemplateListCreateView(MethodPermissionAPIView):
     method_permissions = {
         "GET": "document_templates.read",
@@ -83,6 +106,19 @@ class DocumentTemplateListCreateView(MethodPermissionAPIView):
         )
         serializer.is_valid(raise_exception=True)
         serializer.save(company=request.user.company)
+        template = serializer.instance
+        meta = request_metadata(request)
+        create_audit_log(
+            company=template.company,
+            user=request.user,
+            action="create",
+            entity_type="document_template",
+            entity_id=template.id,
+            previous_values=None,
+            new_values=_template_snapshot(template),
+            ip_address=meta["ip_address"],
+            user_agent=meta["user_agent"],
+        )
         return Response(
             DocumentTemplateSerializer(
                 serializer.instance,
@@ -105,6 +141,7 @@ class DocumentTemplateDetailView(MethodPermissionAPIView):
 
     def patch(self, request, pk):
         template = template_object_or_404(request, pk)
+        before = _template_snapshot(template)
         serializer = DocumentTemplateSerializer(
             template,
             data=request.data,
@@ -113,6 +150,21 @@ class DocumentTemplateDetailView(MethodPermissionAPIView):
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        after = _template_snapshot(serializer.instance)
+        previous, new = diff_snapshots(before, after)
+        if previous or new:
+            meta = request_metadata(request)
+            create_audit_log(
+                company=template.company,
+                user=request.user,
+                action="update",
+                entity_type="document_template",
+                entity_id=template.id,
+                previous_values=previous,
+                new_values=new,
+                ip_address=meta["ip_address"],
+                user_agent=meta["user_agent"],
+            )
         return Response(DocumentTemplateSerializer(serializer.instance).data)
 
     def delete(self, request, pk):
@@ -265,6 +317,18 @@ class DocumentTemplateVersionListCreateView(MethodPermissionAPIView):
             # Caller opened the handle; close it so Windows can release the
             # file lock (the next file replacement deletes the previous file).
             template.file.close()
+        meta = request_metadata(request)
+        create_audit_log(
+            company=template.company,
+            user=request.user,
+            action="version_create",
+            entity_type="document_template_version",
+            entity_id=version.id,
+            previous_values=None,
+            new_values=_template_version_snapshot(version),
+            ip_address=meta["ip_address"],
+            user_agent=meta["user_agent"],
+        )
         return Response(
             TemplateVersionSerializer(version).data, status=status.HTTP_201_CREATED
         )
@@ -297,5 +361,21 @@ class DocumentTemplateVersionActivateView(MethodPermissionAPIView):
     def post(self, request, pk, version_id):
         template = template_object_or_404(request, pk)
         version = version_object_or_404(request, template, version_id)
+        before = _template_version_snapshot(version)
         versioning.activate_version(template, version)
+        after = _template_version_snapshot(version)
+        previous, new = diff_snapshots(before, after)
+        if previous or new:
+            meta = request_metadata(request)
+            create_audit_log(
+                company=template.company,
+                user=request.user,
+                action="version_activate",
+                entity_type="document_template_version",
+                entity_id=version.id,
+                previous_values=previous,
+                new_values=new,
+                ip_address=meta["ip_address"],
+                user_agent=meta["user_agent"],
+            )
         return Response(TemplateVersionSerializer(version).data)

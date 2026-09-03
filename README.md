@@ -1623,6 +1623,54 @@ Company
   role grants, and database-level `GRANT`/`REVOKE` so the application's
   runtime role has `INSERT`/`SELECT` only on this table.
 
+### Audit event writer (Step 5.1)
+
+Business operations create audit records through the reusable service
+`apps/audit_logs/services.py` (`create_audit_log(...)`); no domain code writes
+`AuditLog` rows directly.
+
+- Audit rows are **append-only**: the writer has no update/delete helper, and
+  the database immutability trigger forbids UPDATE/DELETE.
+- **Tenant/user company consistency is enforced**: the caller supplies the
+  `company` explicitly, and a supplied `user` must belong to that company
+  (`AuditTenantMismatchError` otherwise). The company is never inferred or
+  silently corrected; the DB composite FK remains the final boundary.
+- Sensitive payload keys (`password`, `token`, `access_token`,
+  `refresh_token`, `mfa_secret`, `api_key`, `secret`, `authorization`, …) are
+  redacted to `[REDACTED]` at any nesting depth, case-insensitively, without
+  mutating the caller's dicts/lists.
+- Payloads must be standard-JSON-serializable (matching the JSONField DB
+  driver).
+- The writer introduces no transaction of its own — an audit row shares the
+  surrounding business transaction and is rolled back with it.
+- **Business-operation integration** (Step 5.2) wires this writer into the
+  actual client / document template / generated document / PDF operations (see
+  below).
+
+### Business-operation integration (Step 5.2)
+
+The Step 5.1 audit writer is now wired into the existing business operations.
+Each successful operation produces one audit event; failed operations produce
+none, and every event rolls back together with its business transaction.
+
+```text
+Client               create / update / deactivate   action: create / update / deactivate
+Document template    create / update                action: create / update
+Template version     create / activate              action: version_create / version_activate
+Generated document   DOCX generation/regeneration   action: generate
+Generated document   PDF generation                 action: generate_pdf
+```
+
+Events record the authoritative operating company and the acting user
+(`request.user`, or the user passed into the service layer) — never a
+client-supplied company ID. Successful PDF conversion is audited in the same
+transaction as the PDF path update; a failed conversion records nothing.
+Company settings/branding updates are **not yet audited** because no such
+update operation currently exists in the application.
+
+The audit **read API and its RBAC permission are intentionally deferred to the
+next step** — records are written, but there is no read surface yet.
+
 ## Future modules
 
 The following are **designed but not yet implemented** in Django at this

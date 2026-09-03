@@ -8,6 +8,11 @@ from rest_framework.views import APIView
 
 from apps.authentication.api.permissions import IsCompanyMember, permission_required
 from apps.authentication.tenant import get_tenant_object_or_404, tenant_queryset
+from apps.audit_logs.services import (
+    create_audit_log,
+    diff_snapshots,
+    request_metadata,
+)
 from apps.clients.api.serializers import (
     ClientAddressSerializer,
     ClientBankAccountSerializer,
@@ -62,6 +67,43 @@ def child_queryset(request, model, client):
     return tenant_queryset(model, request.user.company).filter(client_id=client.id)
 
 
+def _client_snapshot(client):
+    """
+    Small meaningful business snapshot of a client for audit events: type,
+    status, display name and the primary contact's email/phone. No internal
+    ORM state, no subtype identifiers of a sensitive nature.
+    """
+    if client is None:
+        return None
+    name = None
+    if client.client_type == Client.ClientType.LEGAL_ENTITY:
+        legal = getattr(client, "legal_entity", None)
+        name = legal.legal_name if legal is not None else None
+    else:
+        individual = getattr(client, "individual", None)
+        if individual is not None:
+            name = (
+                " ".join(
+                    p
+                    for p in (
+                        individual.first_name,
+                        individual.middle_name,
+                        individual.last_name,
+                    )
+                    if p
+                )
+                or None
+            )
+    contact = client.contacts.filter(is_primary=True).first()
+    return {
+        "client_type": client.client_type,
+        "status": client.status,
+        "name": name,
+        "email": contact.email if contact else None,
+        "phone": contact.phone if contact else None,
+    }
+
+
 class ClientListCreateView(MethodPermissionAPIView):
     method_permissions = {"GET": "clients.read", "POST": "clients.create"}
 
@@ -92,6 +134,19 @@ class ClientListCreateView(MethodPermissionAPIView):
         )
         serializer.is_valid(raise_exception=True)
         serializer.save(company=request.user.company)
+        client = serializer.instance
+        meta = request_metadata(request)
+        create_audit_log(
+            company=client.company,
+            user=request.user,
+            action="create",
+            entity_type="client",
+            entity_id=client.id,
+            previous_values=None,
+            new_values=_client_snapshot(client),
+            ip_address=meta["ip_address"],
+            user_agent=meta["user_agent"],
+        )
         return Response(
             ClientSerializer(
                 serializer.instance,
@@ -117,6 +172,14 @@ class ClientDetailView(MethodPermissionAPIView):
 
     def patch(self, request, pk):
         client = client_object_or_404(request, pk)
+        # Snapshot from a separate fetch so accessing the OneToOne subtype on
+        # the fetched ``client`` (which caches on that instance) does not make
+        # the serializer below return stale values.
+        before = _client_snapshot(
+            Client.objects.select_related("legal_entity", "individual").get(
+                pk=client.pk
+            )
+        )
         serializer = ClientSerializer(
             client,
             data=request.data,
@@ -125,6 +188,23 @@ class ClientDetailView(MethodPermissionAPIView):
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        after = _client_snapshot(
+            Client.objects.get(pk=serializer.instance.pk)
+        )
+        previous, new = diff_snapshots(before, after)
+        if previous or new:
+            meta = request_metadata(request)
+            create_audit_log(
+                company=client.company,
+                user=request.user,
+                action="update",
+                entity_type="client",
+                entity_id=client.id,
+                previous_values=previous,
+                new_values=new,
+                ip_address=meta["ip_address"],
+                user_agent=meta["user_agent"],
+            )
         return Response(
             ClientSerializer(
                 serializer.instance,
@@ -134,8 +214,21 @@ class ClientDetailView(MethodPermissionAPIView):
 
     def delete(self, request, pk):
         client = client_object_or_404(request, pk)
+        before = _client_snapshot(client)
         client.deleted_at = timezone.now()
         client.save(update_fields=["deleted_at"])
+        meta = request_metadata(request)
+        create_audit_log(
+            company=client.company,
+            user=request.user,
+            action="deactivate",
+            entity_type="client",
+            entity_id=client.id,
+            previous_values=before,
+            new_values=None,
+            ip_address=meta["ip_address"],
+            user_agent=meta["user_agent"],
+        )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

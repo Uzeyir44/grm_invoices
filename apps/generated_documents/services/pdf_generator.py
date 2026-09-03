@@ -54,6 +54,9 @@ import tempfile
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
+from django.db import transaction
+
+from apps.audit_logs.services import create_audit_log
 
 _PDF_HEADER = b"%PDF"
 _DEFAULT_TIMEOUT = 120
@@ -213,7 +216,7 @@ def _pdf_storage_path(version):
     return docx_path + ".pdf"
 
 
-def generate_pdf(version, *, converter=None):
+def generate_pdf(version, *, converter=None, generated_by=None):
     """
     Convert ``version``'s stored DOCX to PDF, persist it, and record it.
 
@@ -223,6 +226,7 @@ def generate_pdf(version, *, converter=None):
         converter: optional callable ``f(docx_bytes) -> pdf_bytes`` used for
             the actual conversion; defaults to LibreOffice headless. Injectable
             for tests.
+        generated_by: optional ``User`` recorded as the generator (audit).
 
     Returns:
         The same ``version`` instance with ``storage_path_pdf`` updated and
@@ -232,6 +236,11 @@ def generate_pdf(version, *, converter=None):
         PdfConversionUnavailableError / PdfGenerationError: conversion failed.
             ``storage_path_pdf`` is left unchanged, no PDF is left in storage,
             and the stored DOCX is not modified.
+
+    On success a single audit event (action ``generate_pdf``) is written in
+    the same transaction as the ``storage_path_pdf`` update. A failed
+    conversion raises before anything is persisted, so no successful PDF audit
+    event is ever recorded for a failed conversion.
     """
     if version is None:
         raise PdfGenerationError("A GeneratedDocumentVersion is required.")
@@ -255,17 +264,33 @@ def generate_pdf(version, *, converter=None):
         )
 
     pdf_path = _pdf_storage_path(version)
-    # Deterministic replacement (mirrors Step 4.4's orphan handling): the path
-    # is derived from this version's DOCX, so it can only belong here. A stale
-    # file from a previous failed attempt or an earlier regeneration is removed
-    # before storing so the recorded path is stable.
-    default_storage.delete(pdf_path)
-    try:
-        stored_name = default_storage.save(pdf_path, ContentFile(pdf_bytes))
-    except Exception:
+    # The storage update and the audit record share one transaction: they
+    # commit (or roll back) together.
+    with transaction.atomic():
+        # Deterministic replacement (mirrors Step 4.4's orphan handling): the
+        # path is derived from this version's DOCX, so it can only belong here.
+        # A stale file from a previous failed attempt or an earlier
+        # regeneration is removed before storing so the recorded path is
+        # stable.
         default_storage.delete(pdf_path)
-        raise
+        try:
+            stored_name = default_storage.save(pdf_path, ContentFile(pdf_bytes))
+        except Exception:
+            default_storage.delete(pdf_path)
+            raise
 
-    version.storage_path_pdf = stored_name
-    version.save(update_fields=["storage_path_pdf"])
+        version.storage_path_pdf = stored_name
+        version.save(update_fields=["storage_path_pdf"])
+        create_audit_log(
+            company=version.company,
+            user=generated_by,
+            action="generate_pdf",
+            entity_type="generated_document_version",
+            entity_id=version.id,
+            previous_values=None,
+            new_values={
+                "generated_document_id": version.generated_document_id,
+                "version_number": version.version_number,
+            },
+        )
     return version

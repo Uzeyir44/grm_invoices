@@ -62,6 +62,7 @@ from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import Max
 
+from apps.audit_logs.services import create_audit_log
 from apps.generated_documents.models import GeneratedDocument, GeneratedDocumentVersion
 from apps.generated_documents.services.context import build_generation_context
 from apps.generated_documents.services.placeholder_engine import render_document
@@ -308,5 +309,29 @@ def generate_document(
             GeneratedDocument.objects.filter(pk=locked_document.pk).update(
                 status=GeneratedDocument.Status.GENERATED
             )
+            final_status = GeneratedDocument.Status.GENERATED
+        else:
+            final_status = locked_document.status
+
+        # One audit event per successful generation (first generation and
+        # regeneration alike). The version identity is captured in the new
+        # values so the history records exactly which version was produced;
+        # this keeps the history understandable without duplicating events.
+        create_audit_log(
+            company=locked_document.company,
+            user=generated_by,
+            action="generate",
+            entity_type="generated_document",
+            entity_id=locked_document.id,
+            previous_values=None,
+            new_values={
+                "document_number": locked_document.document_number,
+                "document_type_id": locked_document.document_type_id,
+                "template_id": locked_document.template_id,
+                "version_number": version_number,
+                "template_version_id": template_version.id,
+                "status": final_status,
+            },
+        )
 
     return version

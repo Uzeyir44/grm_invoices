@@ -249,7 +249,7 @@ class GeneratedDocumentVersionGeneratePdfView(MethodPermissionAPIView):
     def post(self, request, version_id):
         version = version_object_or_404(request, version_id)
         try:
-            result = generate_pdf(version)
+            result = generate_pdf(version, generated_by=request.user)
         except PdfConversionUnavailableError:
             return Response(
                 {"detail": "PDF conversion is currently unavailable."},
