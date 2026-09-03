@@ -16,4 +16,5 @@ urlpatterns = [
     path("authentication/", include("apps.authentication.api.urls")),
     path("clients/", include("apps.clients.api.urls")),
     path("document-templates/", include("apps.document_templates.api.urls")),
+    path("generated-documents/", include("apps.generated_documents.api.urls")),
 ]

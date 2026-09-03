@@ -171,6 +171,13 @@ MEDIA_ROOT = BASE_DIR / "media"
 # Templates are .docx only; the limit is checked at the API layer.
 MAX_TEMPLATE_FILE_SIZE = int(env("MAX_TEMPLATE_FILE_SIZE", 5 * 1024 * 1024))
 
+# LibreOffice binary used to convert generated DOCX files to PDF
+# (document generation Step 4.5). Leave empty to auto-discover via PATH and
+# common install locations; pin it explicitly when needed.
+LIBREOFFICE_PATH = env("LIBREOFFICE_PATH", default="")
+# Maximum seconds a single DOCX -> PDF conversion may take before failing.
+PDF_CONVERSION_TIMEOUT = int(env("PDF_CONVERSION_TIMEOUT", 120))
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 

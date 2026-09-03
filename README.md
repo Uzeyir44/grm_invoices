@@ -113,7 +113,7 @@ follows the same pattern and is mounted under `/api/<feature>/`.
 /api/authentication/me/           → GET current user + company (JWT required)
 /api/clients/                     → client management (see below)
 /api/document-templates/          → document template management (see below)
-/api/documents/                   → planned
+/api/generated-documents/      → document generation + secure downloads (Step 4.6)
 ```
 
 The top-level router lives in `config/api_urls.py` and is mounted from
@@ -978,9 +978,176 @@ from existing. No client-supplied company ID is ever used.
 ### Deferred
 
 ```text
-PDF generation                → Step 4.5 (upcoming)
+PDF generation                → Step 4.5 (implemented, see below)
 Generation / download API     → Step 4.6 (upcoming)
 Line-item row copying for new versions → manual editing step (not this step)
+```
+
+---
+
+## Document Generation — PDF Generation
+
+Step 4.5 of document generation: a reusable service
+(`apps/generated_documents/services/pdf_generator.py`) that converts an
+already-generated DOCX into a PDF and records it on the **same**
+`GeneratedDocumentVersion` via the existing `storage_path_pdf` field. It is
+independent of HTTP/DRF (no request objects, no views) and reuses the Step 4.4
+pipeline without re-rendering templates, touching the placeholder engine, or
+processing line items.
+
+```text
+GeneratedDocumentVersion
+        ↓  read stored DOCX (Django default storage, never modified)
+DOCX → PDF (LibreOffice headless)
+        ↓  persist through default storage (deterministic path)
+GeneratedDocumentVersion.storage_path_pdf
+```
+
+### Conversion runtime (LibreOffice)
+
+DOCX → PDF is delegated to LibreOffice's headless `soffice` binary — a
+**system** dependency, not a pip package:
+
+```text
+Ubuntu/Debian:  sudo apt-get install libreoffice-writer
+macOS:          brew install --cask libreoffice
+Windows:        https://www.libreoffice.org/download/
+```
+
+To verify it is available: `soffice --version`. The service locates `soffice`
+via `PATH` plus common install locations; pin a specific binary with the
+`LIBREOFFICE_PATH` setting / env var, and cap a single conversion with
+`PDF_CONVERSION_TIMEOUT` (seconds, default 120). If the runtime is missing or
+the conversion fails, a clear `PdfConversionUnavailableError` is raised — a
+fake or renamed file is never produced, and the output is validated to be a
+real PDF (`%PDF` header).
+
+### Storage
+
+The PDF is written through Django's configured `default_storage` (same
+conventions as Step 4.4) at a **deterministic path derived from the DOCX
+path** — `storage_path_docx` with the `.docx` suffix replaced by `.pdf` — so
+it lives in the same per-company/per-document/per-version directory. The
+generated DOCX and the source template are never modified. Repeated PDF
+generation for the same version replaces the file at that same path instead of
+creating uncontrolled duplicates. No `GeneratedDocumentVersion` is created for
+a PDF — one version represents `{ DOCX, PDF }`.
+
+### Version & schema note
+
+PDF generation reuses the existing `GeneratedDocumentVersion` row and its
+existing `storage_path_pdf` field — no new model or fields. Because version
+rows are otherwise INSERT-only (the immutability triggers installed by
+`apps/database/migrations/0002_raw_sql_constraints.py`), migration
+`apps/database/migrations/0003_allow_generated_pdf_path_update.py` narrows that
+rule **for `generated_document_versions` only**: an UPDATE is allowed only when
+the lone changed column is `storage_path_pdf` (attaching the PDF to the
+already-final version). Every other column — generation snapshot, version
+number, template version, currency, rates, DOCX path, timestamps — stays
+immutable, and DELETE is still forbidden. `document_line_items` immutability is
+untouched.
+
+### Failure behavior
+
+PDF generation is an **additional** operation on top of successful DOCX
+generation. If conversion or storage fails, the exception propagates,
+`storage_path_pdf` is left unchanged, no half-written PDF is left in storage,
+and the already-successful DOCX version is not invalidated.
+
+### Current limitation
+
+PDF conversion is currently triggered through the Step 4.6 API only. There are
+no standalone public URLs for generated files — every DOCX/PDF is served
+through the authenticated, tenant-scoped download endpoints (see below).
+
+### Deferred
+
+```text
+PDF download / generation API → Step 4.6 (implemented, see below)
+```
+
+---
+
+## Document Generation — Generation API & Secure Downloads
+
+Step 4.6 of document generation: a thin DRF adapter that exposes the completed
+Steps 4.4/4.5 pipeline through authenticated, tenant-scoped, RBAC-protected
+endpoints. No business logic lives in the views — they authenticate, enforce
+isolation and permissions, delegate to the existing generation services, and
+stream files through Django's `default_storage`.
+
+The package lives in `apps/generated_documents/api/` (`serializers.py`,
+`views.py`, `urls.py`) and is mounted at `/api/generated-documents/`.
+
+### Endpoints
+
+```text
+GET  /api/generated-documents/                              list documents (tenant scope)
+GET  /api/generated-documents/<id>/                         retrieve a document
+POST /api/generated-documents/<id>/generate/                generate DOCX (Step 4.4 service)
+GET  /api/generated-documents/<id>/versions/                list the document's versions
+POST /api/generated-documents/versions/<vid>/generate-pdf/  convert version DOCX → PDF (Step 4.5 service)
+GET  /api/generated-documents/versions/<vid>/docx/          download the DOCX
+GET  /api/generated-documents/versions/<vid>/pdf/           download the PDF
+```
+
+`POST .../generate/` accepts an optional `currency_id` (a shared `Currency`
+reference) used when the document has no prior version/line items from which to
+derive a currency; it returns the newly created `GeneratedDocumentVersion`
+(`201 Created`). Regenerating the same document creates the next version while
+previous versions remain downloadable.
+
+### Permissions
+
+Seeded in the data migration `authentication.0005`:
+
+```text
+generated_documents.read      view documents/versions and download DOCX/PDF
+generated_documents.generate  generate a DOCX and convert it to PDF
+```
+
+Generation and PDF conversion require `generated_documents.generate`; listing
+and downloads require `generated_documents.read`. Enforcement reuses the
+existing `IsCompanyMember` + `permission_required(...)` factory — no second
+permission mechanism.
+
+### Tenant isolation
+
+The tenant is exclusively `request.user.company`. Every lookup goes through
+`get_tenant_object_or_404` / `tenant_queryset` (Rule D): a cross-tenant
+document or version is indistinguishable from a missing one and returns `404`,
+never `403`. This applies equally to generation, version listing, and DOCX/PDF
+downloads.
+
+### Storage security
+
+Files are read through Django's `default_storage` and streamed back with
+`FileResponse` as attachments. Storage paths (`storage_path_docx` /
+`storage_path_pdf`) are never exposed: serializers report availability as
+booleans (`storage.docx` / `storage.pdf`), and download filenames are sanitized
+from the document number + version number (e.g. `INV-A-001-v1.docx`). There are
+no public/static URLs for generated files.
+
+### Error behavior
+
+```text
+Unauthenticated              401
+Missing/insufficient RBAC    403
+Cross-tenant / missing row   404
+Missing DOCX / PDF file      404
+Generation failure           400 (controlled detail, no internals/paths)
+Unknown currency_id          400
+PDF runtime unavailable      503
+```
+
+A failed generation or PDF conversion never creates a partially successful
+version and never invalidates previously generated versions.
+
+### Deferred
+
+```text
+Frontend, document preview, PDF editing, email delivery, background workers →
+future steps (out of scope for Step 4.6)
 ```
 
 ---
@@ -1488,8 +1655,12 @@ Note: the PostgreSQL **composite foreign keys, immutable-`company` triggers,
 client-subtype exclusivity, RBAC role/company-match trigger, and version /
 line-item / audit-log INSERT-only triggers** that the earlier sections
 describe as "planned" were applied in
-`apps/database/migrations/0002_raw_sql_constraints.py`. Only RLS policies
-remain in the future-work list above.
+`apps/database/migrations/0002_raw_sql_constraints.py`. Migration
+`apps/database/migrations/0003_allow_generated_pdf_path_update.py` later
+narrowed the `generated_document_versions` immutability trigger so that only
+attaching the generated PDF path (`storage_path_pdf`, document generation Step
+4.5) is allowed — everything else remains immutable. Only RLS policies remain
+in the future-work list above.
 
 ## Architecture Rules
 
