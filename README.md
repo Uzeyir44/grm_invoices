@@ -1668,8 +1668,27 @@ transaction as the PDF path update; a failed conversion records nothing.
 Company settings/branding updates are **not yet audited** because no such
 update operation currently exists in the application.
 
-The audit **read API and its RBAC permission are intentionally deferred to the
-next step** — records are written, but there is no read surface yet.
+### Audit read API (Step 5.3)
+
+The audit logs are readable through a **read-only, tenant-scoped API**:
+
+```text
+GET /api/audit-logs/     list the authenticated user's company audit logs
+```
+
+- Access requires the **`audit_logs.read`** permission (seeded idempotently in
+  the data migration `authentication.0006`), enforced with the existing
+  `IsCompanyMember` + `permission_required(...)` factory.
+- Results are scoped exclusively to `request.user.company` (newest first,
+  using the existing `(company, -created_at)` index). A company ID from the
+  client is never used, and knowing another company's record IDs does not
+  expose them — a Company-A user only ever sees Company-A logs.
+- The API is strictly **read-only** (no create/update/delete endpoints);
+  records remain append-only and the database immutability trigger is
+  unchanged. The serializer exposes compact `company_id` / `user_id`
+  identifiers and already-redacted `previous_values` / `new_values` — never
+  full user/company objects or sensitive material.
+- Advanced filtering, search, and pagination are **deferred to Step 5.4**.
 
 ## Future modules
 
