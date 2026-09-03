@@ -1329,9 +1329,9 @@ These are shared/global reference data and intentionally do **not** contain a
 - Stores a currency pair (`from_currency`, `to_currency`), the `rate`, and the
   `effective_at` time.
 - Has an index optimized for `(from_currency, to_currency, effective_at)`.
-- The rate actually used when generating a document will later be captured in
-  the document generation snapshot/version; this table only reflects
-  current/historical market rates.
+- The rate actually used when generating a document is captured in that
+  version's `exchange_rate_used` snapshot at generation time; this table only
+  reflects current/historical market rates.
 
 ### AddressType
 
