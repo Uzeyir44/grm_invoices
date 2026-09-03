@@ -123,6 +123,15 @@ class TenantIsolationTests(AuditLogAPITestCase):
         ids = [row["id"] for row in self.results(self.get_list(action="generate_pdf"))]
         self.assertEqual(ids, [])
 
+    def test_company_id_query_param_cannot_bypass_tenant_scope(self):
+        # company_id is not a supported parameter; supplying another
+        # company's id must never widen the caller's scope.
+        self.auth(self.alice)
+        data = self.get_list(company_id=self.company_b.id).json()
+        ids = {row["id"] for row in data["results"]}
+        self.assertEqual(ids, {self.event_a.id})
+        self.assertTrue(all(row["company_id"] == self.company_a.id for row in data["results"]))
+
 
 class ListingTests(AuditLogAPITestCase):
     def test_newest_first_with_deterministic_order(self):

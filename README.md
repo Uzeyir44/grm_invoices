@@ -1616,12 +1616,14 @@ Company
 - `created_at` is the only timestamp.
 - There are indexes on `(company, -created_at)`, `(company, entity_type,
   entity_id)`, `user`, and `request_id`.
-- Deferred to a raw-SQL migration: the composite FK
-  `(user_id, company_id) → users(id, company_id)` (so a Company-A audit log
-  can never be attributed to a Company-B user), a BEFORE UPDATE/DELETE
-  trigger raising an exception as a second line of defense independent of
-  role grants, and database-level `GRANT`/`REVOKE` so the application's
-  runtime role has `INSERT`/`SELECT` only on this table.
+- DB-level integrity protections were applied via the raw-SQL migration
+  `apps/database/migrations/0002_raw_sql_constraints.py`: the composite FK
+  `(user_id, company_id) → users(id, company_id)` (so a Company-A audit log can
+  never be attributed to a Company-B user) and the immutability trigger
+  `trg_audit_logs_immutable` (BEFORE UPDATE/DELETE raises, keeping the table
+  append-only). Only the deployment-level `GRANT`/`REVOKE` (INSERT/SELECT only
+  on this table for the runtime role) remains an ops checklist item, not
+  expressed in code.
 
 ### Audit event writer (Step 5.1)
 

@@ -38,6 +38,15 @@ def build_template_docx():
     return out.getvalue()
 
 
+def build_invalid_template_docx():
+    document = Document()
+    document.add_paragraph("Bad placeholder: {{ bogus.field }}")
+    out = BytesIO()
+    document.save(out)
+    out.seek(0)
+    return out.getvalue()
+
+
 class TemplateAuditTestCase(APITestCase):
     def setUp(self):
         self.company = make_company()
@@ -120,6 +129,28 @@ class TemplateUpdateAuditTests(TemplateAuditTestCase):
         self.assertEqual(event.company_id, self.company.id)
         self.assertEqual(event.user_id, self.user.id)
 
+    def test_noop_template_update_records_no_event(self):
+        template_id = self.create_template(name="Same")
+        before = AuditLog.objects.count()
+        response = self.client.patch(
+            reverse("document-template-detail", kwargs={"pk": template_id}),
+            {"name": "Same"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(AuditLog.objects.count(), before)
+
+    def test_failed_template_update_records_no_event(self):
+        template_id = self.create_template(name="Before")
+        before = AuditLog.objects.count()
+        response = self.client.patch(
+            reverse("document-template-detail", kwargs={"pk": template_id}),
+            {"document_type": 999999},
+            format="json",
+        )
+        self.assertIn(response.status_code, (status.HTTP_400_BAD_REQUEST, status.HTTP_404_NOT_FOUND))
+        self.assertEqual(AuditLog.objects.count(), before)
+
 
 class TemplateVersionAuditTests(TemplateAuditTestCase):
     def setUp(self):
@@ -145,6 +176,39 @@ class TemplateVersionAuditTests(TemplateAuditTestCase):
         self.assertEqual(event.new_values["template_id"], self.template_id)
         self.assertEqual(event.new_values["version_number"], 1)
         self.assertEqual(event.new_values["is_active"], True)
+
+    def test_failed_version_create_records_no_event(self):
+        # A template whose file contains an invalid placeholder is rejected at
+        # version-creation time, so no version and no audit event are created.
+        bad_template_id = self.create_template(name="Bad Template")
+        upload = SimpleUploadedFile(
+            "bad.docx",
+            build_invalid_template_docx(),
+            content_type="application/octet-stream",
+        )
+        response = self.client.post(
+            reverse("document-template-file", kwargs={"pk": bad_template_id}),
+            {"file": upload},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        before = AuditLog.objects.count()
+        response = self.client.post(
+            reverse(
+                "document-template-version-list-create",
+                kwargs={"pk": bad_template_id},
+            ),
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(AuditLog.objects.count(), before)
+        self.assertFalse(
+            AuditLog.objects.filter(
+                entity_type="document_template_version"
+            ).exists()
+        )
 
     def test_version_activate_records_event(self):
         first = self.client.post(self.version_list_url(), {}, format="json")

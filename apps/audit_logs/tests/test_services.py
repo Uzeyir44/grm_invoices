@@ -9,7 +9,7 @@ any business-operation integration (that is Step 5.2).
 from decimal import Decimal
 from uuid import uuid4
 
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.test import TestCase
 
 from apps.audit_logs.models import AuditLog
@@ -182,6 +182,37 @@ class SensitiveDataTests(TestCase):
         self.assertEqual(source, {"a": {"secret": "s"}, "b": ["x"]})
         self.assertEqual(copy["a"]["secret"], REDACTED_MARKER)
 
+    def test_nested_dict_and_list_shape_is_redacted(self):
+        payload = {
+            "profile": {"token": "secret", "name": "bob"},
+            "items": [{"password": "secret", "qty": 2}],
+            "ok": "kept",
+        }
+        result = create_audit_log(
+            company=self.company,
+            action="record",
+            entity_type="client",
+            entity_id=1,
+            new_values=payload,
+        ).new_values
+        self.assertEqual(result["profile"]["token"], REDACTED_MARKER)
+        self.assertEqual(result["profile"]["name"], "bob")
+        self.assertEqual(result["items"][0]["password"], REDACTED_MARKER)
+        self.assertEqual(result["items"][0]["qty"], 2)
+        self.assertEqual(result["ok"], "kept")
+
+    def test_none_payload_remains_none(self):
+        event = create_audit_log(
+            company=self.company,
+            action="record",
+            entity_type="client",
+            entity_id=1,
+            previous_values=None,
+            new_values=None,
+        )
+        self.assertIsNone(event.previous_values)
+        self.assertIsNone(event.new_values)
+
 
 class JsonBehaviorTests(TestCase):
     def setUp(self):
@@ -265,3 +296,26 @@ class TransactionBehaviorTests(TestCase):
         self.assertFalse(
             AuditLog.objects.filter(action="rollback").exists()
         )
+
+
+class ImmutabilityTests(TestCase):
+    def test_database_blocks_update_and_delete(self):
+        company = make_company()
+        event = create_audit_log(
+            company=company, action="a", entity_type="client", entity_id=1
+        )
+        with self.assertRaises(DatabaseError):
+            with transaction.atomic():
+                AuditLog.objects.filter(pk=event.pk).update(action="changed")
+        with self.assertRaises(DatabaseError):
+            with transaction.atomic():
+                AuditLog.objects.filter(pk=event.pk).delete()
+        event.refresh_from_db()
+        self.assertEqual(event.action, "a")
+        self.assertTrue(AuditLog.objects.filter(pk=event.pk).exists())
+
+    def test_writer_exposes_no_update_or_delete_helper(self):
+        import apps.audit_logs.services as services
+
+        for name in ("update_audit_log", "delete_audit_log"):
+            self.assertFalse(hasattr(services, name), name)

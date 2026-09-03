@@ -5,7 +5,9 @@ events for failed operations.
 """
 
 import uuid
+from unittest import mock
 
+from django.db import IntegrityError
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -99,6 +101,33 @@ class ClientUpdateAuditTests(ClientAuditTestCase):
             {"client_type": "individual"},
             format="json",
         )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(AuditLog.objects.count(), before)
+
+    def test_noop_client_update_records_no_event(self):
+        before = AuditLog.objects.count()
+        response = self.client.patch(
+            reverse("client-detail", kwargs={"pk": self.client_id}),
+            {"legal_entity": {"legal_name": "Acme Ltd"}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Unchanged fields must not be logged.
+        self.assertEqual(AuditLog.objects.count(), before)
+
+    def test_client_update_db_failure_records_no_event(self):
+        before = AuditLog.objects.count()
+        with mock.patch(
+            "apps.clients.api.serializers.ClientSerializer.save",
+            side_effect=IntegrityError("boom"),
+        ):
+            response = self.client.patch(
+                reverse("client-detail", kwargs={"pk": self.client_id}),
+                {"legal_entity": {"legal_name": "Acme LLC"}},
+                format="json",
+            )
+        # The clients base view maps DB integrity conflicts to 400; a failed
+        # update must never leave an audit event behind.
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(AuditLog.objects.count(), before)
 
