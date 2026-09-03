@@ -1688,7 +1688,50 @@ GET /api/audit-logs/     list the authenticated user's company audit logs
   unchanged. The serializer exposes compact `company_id` / `user_id`
   identifiers and already-redacted `previous_values` / `new_values` — never
   full user/company objects or sensitive material.
-- Advanced filtering, search, and pagination are **deferred to Step 5.4**.
+
+### Filtering & pagination (Step 5.4)
+
+`GET /api/audit-logs/` supports a whitelist of optional, composable query
+parameters. Every filter operates **inside** the caller's tenant scope (the
+company is always `request.user.company`, never a client-supplied value), so a
+Company-A user can never retrieve Company-B records by filtering on
+`entity_id`/`user_id`/`request_id` — unknown matches simply return no records.
+
+```text
+?action=create | update | deactivate | generate | generate_pdf | ...
+?entity_type=client | document_template | generated_document | ...
+?entity_id=123
+?user_id=42
+?created_after=2026-09-01T00:00:00Z     (inclusive, created_at >=)
+?created_before=2026-09-30T23:59:59Z    (inclusive, created_at <=)
+```
+
+Examples:
+
+```text
+GET /api/audit-logs/?action=update
+GET /api/audit-logs/?entity_type=client
+GET /api/audit-logs/?entity_id=123
+GET /api/audit-logs/?user_id=42
+GET /api/audit-logs/?created_after=2026-09-01T00:00:00Z&created_before=2026-09-30T23:59:59Z
+```
+
+Invalid values (`entity_id=abc`, `created_after=not-a-date`) and an invalid
+range (`created_after` later than `created_before`) return the project's normal
+`400` validation response. `user_id` from another company yields no records
+(no existence leak).
+
+Results are **paginated** with DRF `PageNumberPagination`:
+
+```text
+?page=1&page_size=50
+```
+
+Response: `{ "count", "next", "previous", "results" }`. Default page size is
+50; `page_size` is capped at 100; an out-of-range page returns `404`.
+Ordering is newest-first by `created_at DESC` with `id DESC` as a deterministic
+tiebreak, reusing the existing `(company, -created_at)` index. Search and CSV
+export are not implemented.
 
 ## Future modules
 
