@@ -1355,6 +1355,49 @@ These are shared/global reference data and intentionally do **not** contain a
 - Stores bank name, SWIFT/BIC where available (`swift_code`), and active
   status (`is_active`).
 
+### Seed / catalog status (Step 6.2)
+
+- **AddressType** is the only catalog with canonical seed data, defined in the
+  data migration
+  `apps/reference_data/migrations/0002_seed_address_types.py` (`legal`,
+  `business`, `residential`).
+- **Currency**, **DocumentType**, **VatRate**, and **Bank** are intentionally
+  **not seeded**: the project does not yet define an authoritative canonical
+  set of currencies, document types, VAT rate/validity definitions, or banks,
+  so no values are guessed. Application code creates these rows as needed.
+- **ExchangeRate** is dynamic operational data and is **not auto-populated**;
+  external/provider integration, fetching, and scheduled synchronization are
+  deliberately deferred.
+
+### Read-only access layer (Step 6.3)
+
+Reference data is exposed through a **read-only, authenticated** API. These
+catalogs are shared/global data (no `company` ownership), so they are not
+tenant-scoped; any authorized member may read the shared catalog:
+
+```text
+GET /api/reference-data/address-types/
+GET /api/reference-data/banks/
+GET /api/reference-data/currencies/
+GET /api/reference-data/document-types/
+GET /api/reference-data/vat-rates/
+GET /api/reference-data/exchange-rates/
+```
+
+- Access requires the **`reference_data.read`** permission (seeded idempotently
+  in `authentication.0007`), enforced with the existing `IsCompanyMember` +
+  `permission_required(...)` factory: unauthenticated → `401`, no permission →
+  `403`.
+- Endpoints are strictly **GET-only** (write methods → `405`). Responses are
+  plain lists with deterministic server-side ordering and contain only explicit
+  serializer fields (e.g. compact `from_currency_id` / `to_currency_id` for
+  exchange rates).
+- **Currently populated:** `address-types` (the canonical `legal` /
+  `business` / `residential` seed). **Currently empty:** `banks`, `currencies`,
+  `document-types`, `vat-rates`, `exchange-rates` — no records are fabricated;
+  they return an empty list until canonical data is defined. `ExchangeRate`
+  remains dynamic and deferred.
+
 ## 4. Client Management
 
 App:

@@ -18,4 +18,5 @@ urlpatterns = [
     path("document-templates/", include("apps.document_templates.api.urls")),
     path("generated-documents/", include("apps.generated_documents.api.urls")),
     path("audit-logs/", include("apps.audit_logs.api.urls")),
+    path("reference-data/", include("apps.reference_data.api.urls")),
 ]
