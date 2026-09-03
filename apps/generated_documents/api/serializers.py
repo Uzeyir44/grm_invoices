@@ -1,11 +1,13 @@
 """
 Serializers for the Step 4.6 generation API and secure download endpoints.
 
-Read-only by design: the API is an adapter around the existing generation
-services, not a CRUD surface. Storage paths are deliberately never exposed —
-availability is surfaced as booleans and the files are only reachable through
-the authenticated download endpoints.
+Read-only by design for the read surface; the create serializer (document
+creation + numbering) accepts only reference ids and line-item inputs — never
+tenant data (company always comes from the authenticated user) and never
+storage paths.
 """
+
+from decimal import Decimal
 
 from rest_framework import serializers
 
@@ -93,3 +95,41 @@ class GeneratedDocumentGenerateSerializer(serializers.Serializer):
     """
 
     currency_id = serializers.IntegerField(required=False, allow_null=True)
+
+
+class GeneratedDocumentLineItemInputSerializer(serializers.Serializer):
+    """Validated line-item input for the initial version of a new document."""
+
+    description = serializers.CharField()
+    quantity = serializers.DecimalField(max_digits=14, decimal_places=4)
+    unit = serializers.CharField(
+        required=False, allow_null=True, allow_blank=True, max_length=30
+    )
+    unit_price = serializers.DecimalField(max_digits=18, decimal_places=4)
+    discount_percent = serializers.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        required=False,
+        default=Decimal("0"),
+    )
+    vat_rate_percent = serializers.DecimalField(max_digits=5, decimal_places=2)
+
+
+class GeneratedDocumentCreateSerializer(serializers.Serializer):
+    """
+    Input for document creation (POST /api/generated-documents/).
+
+    Only reference ids and optional line-item inputs are accepted. The company
+    is always the authenticated user's company (a body ``company_id`` is
+    ignored); the client is resolved tenant-scoped by the view (cross-company
+    client → 404). The initial version's currency is provided via
+    ``currency_id`` (V1 requirement), and line items — when supplied — are
+    validated field-by-field here.
+    """
+
+    client_id = serializers.IntegerField()
+    document_type_id = serializers.IntegerField()
+    currency_id = serializers.IntegerField(required=False, allow_null=True)
+    items = GeneratedDocumentLineItemInputSerializer(
+        many=True, required=False, allow_empty=True
+    )

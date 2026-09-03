@@ -27,13 +27,20 @@ from rest_framework.views import APIView
 
 from apps.authentication.api.permissions import IsCompanyMember, permission_required
 from apps.authentication.tenant import get_tenant_object_or_404, tenant_queryset
+from apps.audit_logs.services import request_metadata
+from apps.clients.models import Client
 from apps.generated_documents.api.serializers import (
+    GeneratedDocumentCreateSerializer,
     GeneratedDocumentGenerateSerializer,
     GeneratedDocumentSerializer,
     GeneratedDocumentVersionSerializer,
 )
 from apps.generated_documents.models import GeneratedDocument, GeneratedDocumentVersion
 from apps.generated_documents.services.context import GenerationContextError
+from apps.generated_documents.services.document_creation import (
+    DocumentCreationError,
+    create_generated_document,
+)
 from apps.generated_documents.services.generator import (
     GenerationError,
     generate_document,
@@ -142,7 +149,16 @@ def _stream_version_file(version, storage_path, extension, content_type):
 
 
 class GeneratedDocumentListView(MethodPermissionAPIView):
-    method_permissions = {"GET": "generated_documents.read"}
+    """
+      GET  -> list the caller's company documents
+      POST -> create a document (automatic numbering + initial version), then
+              the existing pipeline generates DOCX/PDF from it separately.
+    """
+
+    method_permissions = {
+        "GET": "generated_documents.read",
+        "POST": "generated_documents.generate",
+    }
 
     def get(self, request):
         queryset = (
@@ -151,6 +167,42 @@ class GeneratedDocumentListView(MethodPermissionAPIView):
             .order_by("-created_at")
         )
         return Response(GeneratedDocumentSerializer(queryset, many=True).data)
+
+    def post(self, request):
+        serializer = GeneratedDocumentCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        # The client must belong to the caller's company; a cross-company or
+        # missing client is indistinguishable and resolves to 404 (Rule D).
+        client = get_tenant_object_or_404(
+            Client,
+            request.user.company,
+            pk=serializer.validated_data["client_id"],
+            deleted_at__isnull=True,
+        )
+        meta = request_metadata(request)
+        try:
+            document = create_generated_document(
+                company=request.user.company,
+                user=request.user,
+                client=client,
+                document_type_id=serializer.validated_data["document_type_id"],
+                currency_id=serializer.validated_data.get("currency_id"),
+                items=serializer.validated_data.get("items"),
+                ip_address=meta["ip_address"],
+                user_agent=meta["user_agent"],
+            )
+        except DocumentCreationError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            GeneratedDocumentSerializer(
+                document,
+                context={"request": request, "company": request.user.company},
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class GeneratedDocumentDetailView(MethodPermissionAPIView):

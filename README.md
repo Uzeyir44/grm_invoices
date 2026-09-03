@@ -1083,6 +1083,7 @@ The package lives in `apps/generated_documents/api/` (`serializers.py`,
 
 ```text
 GET  /api/generated-documents/                              list documents (tenant scope)
+POST /api/generated-documents/                              create a document (numbering + initial version)
 GET  /api/generated-documents/<id>/                         retrieve a document
 POST /api/generated-documents/<id>/generate/                generate DOCX (Step 4.4 service)
 GET  /api/generated-documents/<id>/versions/                list the document's versions
@@ -1090,6 +1091,17 @@ POST /api/generated-documents/versions/<vid>/generate-pdf/  convert version DOCX
 GET  /api/generated-documents/versions/<vid>/docx/          download the DOCX
 GET  /api/generated-documents/versions/<vid>/pdf/           download the PDF
 ```
+
+`POST /api/generated-documents/` creates a document from scratch: it requires
+`client_id`, `document_type_id` and the initial version's `currency_id`, plus
+optional `items` (line items for version 1). It allocates the company-scoped
+document number through the atomic `CompanyDocumentCounter.next_number()`
+(UPSERT…RETURNING), creates the `GeneratedDocument` (draft) with its initial
+`GeneratedDocumentVersion` (v1) and any line items, and records a `create`
+audit event — all in one transaction (`apps/generated_documents/services/
+document_creation.py`). A client belonging to another company resolves to
+`404`; a body `company_id` is ignored. Concurrent creation of documents never
+produces duplicate numbers for the same company.
 
 `POST .../generate/` accepts an optional `currency_id` (a shared `Currency`
 reference) used when the document has no prior version/line items from which to
