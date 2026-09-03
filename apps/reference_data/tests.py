@@ -22,6 +22,7 @@ from rest_framework.test import APITestCase
 
 from apps.authentication.models import Permission, Role, UserRole
 from apps.authentication.tests.test_authentication import make_company, make_user
+from apps.clients.models import Client, ClientLegalEntity
 from apps.reference_data.models import (
     AddressType,
     Bank,
@@ -370,3 +371,154 @@ class ReferenceDataGlobalCatalogTests(ReferenceDataApiTestCase):
         }
         self.assertEqual(a_codes, b_codes)
         self.assertEqual(a_codes, {"legal", "business", "residential"})
+
+
+class ReferenceDataBusinessValidationTests(APITestCase):
+    """
+    Step 6.4 integration validation: business objects reference the shared
+    reference-data catalogs through real FKs, and invalid/nonexistent
+    reference-data IDs are rejected at the API layer.
+
+    Rows used here are test fixtures created through the ORM — they are not
+    seed data (Step 6.2's empty-catalog decisions remain authoritative).
+    """
+
+    CLIENT_PERMS = ("clients.read", "clients.create", "clients.update")
+
+    def setUp(self):
+        self.company_a = make_company()
+        self.company_b = make_company()
+        self.alice = make_user(self.company_a, email="alice@example.com")
+        self.carol = make_user(self.company_b, email="carol@example.com")
+
+        # Shared catalogs: AddressType already has canonical seed rows
+        # (legal/business/residential); the other catalogs are currently
+        # unseeded, so their rows here are application/test fixtures managed
+        # through the ORM — not seed data.
+        self.address_type = AddressType.objects.get(code="legal")
+        self.bank = Bank.objects.create(name="Test Bank")
+        self.currency = Currency.objects.create(code="AZN", name="Manat")
+        self.document_type = DocumentType.objects.create(code="invoice", name="Invoice")
+
+        self.client_a = self._make_client(self.company_a, "Acme A")
+        self.client_b = self._make_client(self.company_b, "Acme B")
+
+    def _make_client(self, company, legal_name):
+        client = Client.objects.create(
+            company=company, client_type=Client.ClientType.LEGAL_ENTITY
+        )
+        ClientLegalEntity.objects.create(
+            client=client, company=company, legal_name=legal_name, voen="1234567890"
+        )
+        return client
+
+    def grant(self, user, *codes):
+        role = Role.objects.create(name=f"R{uuid.uuid4().hex[:8]}", company=None)
+        for code in codes:
+            role.permissions.add(Permission.objects.get(code=code))
+        UserRole.objects.create(user=user, role=role)
+
+    def auth(self, user):
+        self.client.force_authenticate(user=user)
+
+    def address_url(self, client):
+        return reverse("client-address-list-create", kwargs={"pk": client.id})
+
+    def bank_account_url(self, client):
+        return reverse("client-bank-account-list-create", kwargs={"pk": client.id})
+
+
+class ValidReferenceTests(ReferenceDataBusinessValidationTests):
+    def setUp(self):
+        super().setUp()
+        self.grant(self.alice, *self.CLIENT_PERMS)
+        self.auth(self.alice)
+
+    def test_valid_address_type_is_accepted(self):
+        response = self.client.post(
+            self.address_url(self.client_a),
+            {"address_type": self.address_type.id, "line1": "Main St 1"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_valid_bank_and_currency_are_accepted(self):
+        response = self.client.post(
+            self.bank_account_url(self.client_a),
+            {
+                "bank": self.bank.id,
+                "currency": self.currency.id,
+                "iban": "AZ00TEST0000000000000001",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+
+class InvalidReferenceTests(ReferenceDataBusinessValidationTests):
+    def setUp(self):
+        super().setUp()
+        self.grant(self.alice, *self.CLIENT_PERMS)
+        self.auth(self.alice)
+
+    def test_nonexistent_address_type_is_rejected(self):
+        response = self.client.post(
+            self.address_url(self.client_a),
+            {"address_type": 999999, "line1": "Main St 1"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_nonexistent_bank_is_rejected(self):
+        response = self.client.post(
+            self.bank_account_url(self.client_a),
+            {
+                "bank": 999999,
+                "currency": self.currency.id,
+                "iban": "AZ00TEST0000000000000002",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_nonexistent_currency_is_rejected(self):
+        response = self.client.post(
+            self.bank_account_url(self.client_a),
+            {
+                "bank": self.bank.id,
+                "currency": 999999,
+                "iban": "AZ00TEST0000000000000003",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_reference_id_from_another_catalog_is_rejected(self):
+        # An id that is valid in one catalog (DocumentType) must not be
+        # accepted as an AddressType simply because the number exists
+        # somewhere in the system.
+        DocumentType.objects.create(pk=500, code="contract", name="Contract")
+        response = self.client.post(
+            self.address_url(self.client_a),
+            {"address_type": 500, "line1": "Main St 1"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class TenantIntegrationTests(ReferenceDataBusinessValidationTests):
+    def test_global_catalog_does_not_bypass_business_tenant_isolation(self):
+        self.grant(self.alice, *self.CLIENT_PERMS)
+        self.grant(self.carol, *self.CLIENT_PERMS)
+        self.auth(self.carol)
+        # Carol (Company B) shares the global AddressType catalog but cannot
+        # attach an address to Alice's (Company A) client.
+        response = self.client.post(
+            self.address_url(self.client_a),
+            {"address_type": self.address_type.id, "line1": "Hi-jacked"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(
+            self.client_a.addresses.filter(line1="Hi-jacked").exists()
+        )

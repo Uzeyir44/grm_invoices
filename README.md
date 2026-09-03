@@ -1398,6 +1398,36 @@ GET /api/reference-data/exchange-rates/
   they return an empty list until canonical data is defined. `ExchangeRate`
   remains dynamic and deferred.
 
+### Integration & validation (Step 6.4)
+
+Business objects reference the shared catalogs through real, `PROTECT` foreign
+keys:
+
+```text
+ClientAddress          → AddressType
+ClientBankAccount      → Bank, Currency
+DocumentTemplate       → DocumentType
+GeneratedDocument      → DocumentType
+GeneratedDocumentVersion / DocumentLineItem → Currency
+ExchangeRate           → Currency (from/to)
+```
+
+Validation behavior:
+
+- Nonexistent or invalid reference-data IDs passed to business APIs are
+  rejected with a `400` validation error (DRF relationship validation); the
+  database FK is the final boundary, and an ID valid only in a *different*
+  catalog is rejected rather than accepted.
+- Generated documents do **not** hold live FKs to `VatRate`/`ExchangeRate`:
+  their VAT and exchange-rate values are snapshot `Decimal` fields copied onto
+  the version/line items at generation time (by design).
+- `Bank.is_active` exists, but **no business rule is defined yet** for
+  rejecting inactive banks when selecting them on new business objects — this
+  remains an open decision, not an invented default.
+- Global catalogs never bypass business-object tenant isolation (e.g. a
+  Company-B user cannot attach an address to a Company-A client even though
+  `AddressType` is shared).
+
 ## 4. Client Management
 
 App:
