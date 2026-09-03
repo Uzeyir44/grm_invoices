@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 
 from apps.companies.models import Company
 from apps.reference_data.models import DocumentType
@@ -153,6 +154,14 @@ class TemplateVersion(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["template", "version_number"], name="uq_template_version_number"
+            ),
+            # At most one active TemplateVersion per DocumentTemplate. The
+            # application service serializes activations with a row lock; this
+            # conditional unique constraint is the database-enforced backstop.
+            models.UniqueConstraint(
+                fields=["template"],
+                condition=Q(is_active=True),
+                name="uq_template_version_single_active",
             ),
         ]
 

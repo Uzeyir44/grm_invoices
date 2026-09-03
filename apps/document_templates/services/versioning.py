@@ -35,8 +35,19 @@ def create_version(template, uploaded_file, created_by=None):
     against race conditions by the DB ``UNIQUE(template, version_number)``
     constraint. The new version becomes the template's only active version.
 
+    The parent ``DocumentTemplate`` row is locked (``SELECT ... FOR UPDATE``)
+    before the active-version pointer is changed, so concurrent creation and
+    activation operations for the same template are serialized and can never
+    leave more than one active version (backstopped by the
+    ``uq_template_version_single_active`` partial unique constraint).
+
     Returns the created TemplateVersion.
     """
+    # Serialize version-management operations for this template: the lock is
+    # held until this transaction commits, so a concurrent create/activate on
+    # the same template cannot interleave its deactivate/activate sequence.
+    template = DocumentTemplate.objects.select_for_update().get(pk=template.pk)
+
     next_number = (
         template.versions.aggregate(m=Max("version_number"))["m"] or 0
     ) + 1
@@ -74,11 +85,33 @@ def activate_version(template, version):
     Make ``version`` the template's single active version. Historical
     versions are preserved (their contents are never touched); only the
     ``is_active`` flag changes.
+
+    Concurrency-safe: the parent ``DocumentTemplate`` row is locked
+    (``SELECT ... FOR UPDATE``) so two concurrent activations for different
+    versions of the same template are serialized. The previous active
+    version(s) are deactivated first, then the requested version is
+    activated, so the ``uq_template_version_single_active`` partial unique
+    constraint is never transiently violated and never ends up broken — the
+    invariant "at most one active version per template" is guaranteed even
+    under concurrent requests.
     """
     with transaction.atomic():
-        TemplateVersion.objects.filter(template=template, is_active=True).update(
-            is_active=False
+        # Serialize activation for this template (held until commit below).
+        locked_template = DocumentTemplate.objects.select_for_update().get(
+            pk=template.pk
         )
+        if version.template_id != locked_template.id:
+            raise ValueError(
+                "TemplateVersion does not belong to the given DocumentTemplate."
+            )
+
+        # Deactivate existing active version(s) first, then activate the
+        # requested one. Ordering matters: with the partial unique constraint
+        # on is_active=True, activating BEFORE deactivating would transiently
+        # violate it.
+        TemplateVersion.objects.filter(
+            template=locked_template, is_active=True
+        ).update(is_active=False)
         version.is_active = True
         version.save(update_fields=["is_active"])
     return version

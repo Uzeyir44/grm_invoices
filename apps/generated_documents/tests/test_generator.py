@@ -246,12 +246,12 @@ class VersionPersistenceTests(GenerationServiceTestCase):
 
     def test_template_tracking_records_used_template_version(self):
         tv2 = self._make_template_version(
-            file_content=build_invoice_template(), version_number=2
+            file_content=build_invoice_template(), version_number=2, active=False
         )
-        tv2.is_active = True
-        tv2.save(update_fields=["is_active"])
         self.template_version.is_active = False
         self.template_version.save(update_fields=["is_active"])
+        tv2.is_active = True
+        tv2.save(update_fields=["is_active"])
         version = generate_document(self.document, currency=self.currency)
         self.assertEqual(version.template_version_id, tv2.id)
 
@@ -283,11 +283,14 @@ class FailureBehaviorTests(GenerationServiceTestCase):
         d.add_paragraph("{{ bogus.field }}")
         d.save(bad)
         bad.seek(0)
-        tv = self._make_template_version(file_content=bad.getvalue(), version_number=3)
-        tv.is_active = True
-        tv.save(update_fields=["is_active"])
+        tv = self._make_template_version(
+            file_content=bad.getvalue(), version_number=3, active=False
+        )
         self.template_version.is_active = False
         self.template_version.save(update_fields=["is_active"])
+        tv.is_active = True
+        tv.save(update_fields=["is_active"])
+
         with self.assertRaises(UnknownPlaceholderError):
             generate_document(self.document, currency=self.currency)
         self.assertEqual(
@@ -307,6 +310,8 @@ class FailureBehaviorTests(GenerationServiceTestCase):
         )
 
     def test_template_without_file_fails(self):
+        self.template_version.is_active = False
+        self.template_version.save(update_fields=["is_active"])
         tv = TemplateVersion.objects.create(
             template=self.template,
             company=self.company,
@@ -314,8 +319,6 @@ class FailureBehaviorTests(GenerationServiceTestCase):
             storage_path="v3",
             is_active=True,
         )
-        self.template_version.is_active = False
-        self.template_version.save(update_fields=["is_active"])
         with self.assertRaises(GenerationError):
             generate_document(self.document, currency=self.currency)
 
