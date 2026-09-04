@@ -132,6 +132,28 @@ describe('App', () => {
     expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument()
   })
 
+  it('redirects unauthenticated users away from client routes', async () => {
+    for (const path of ['/clients', '/clients/new', '/clients/1', '/clients/1/edit']) {
+      const { unmount } = renderAt(path)
+      expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it('renders the client list inside the protected shell for authenticated users', async () => {
+    setAccessToken('token-1')
+    stubBackend()
+
+    renderAt('/clients')
+
+    expect(
+      await screen.findByRole('navigation', { name: /main navigation/i }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /clients/i })).toBeInTheDocument()
+    // The empty backend client list produces the empty state (no fabricated rows).
+    expect(await screen.findByText('No clients yet.')).toBeInTheDocument()
+  })
+
   it('renders a not-found page for unknown routes', async () => {
     renderAt('/definitely-not-a-route')
     expect(await screen.findByRole('heading', { name: /not found/i })).toBeInTheDocument()

@@ -3,14 +3,16 @@
 Frontend application for the GRM CRM Django backend.
 
 Implemented so far:
+- **Clients vertical slice** (Phase 4): client list with search/filters, create,
+  detail (with read-only nested data), edit, and soft-delete confirmation.
 - **Application shell + dashboard** (Phase 3): authenticated shell (responsive
   sidebar, header, sign-out), real-data dashboard.
 - **Authentication vertical slice** (Phase 2): login, token storage, `/me`
   initialization, protected routes, automatic access-token refresh, logout.
 - **Technical foundation** (Phase 1): routing, Tailwind, the generic API
   client, the typed error model.
-- No business features (client CRUD, template management, document
-  generation/PDF UI) are implemented yet — those routes are placeholders.
+- Template management and document generation/PDF UI are not implemented yet —
+  those routes are placeholders.
 
 ## Stack
 
@@ -76,6 +78,41 @@ state ("No clients yet."), and safe error state with a retry action; a failing
 section never takes down the rest of the page. There is deliberately **no**
 backend summary endpoint and no fabricated dashboard statistics.
 
+## Clients
+
+`/clients` (`src/pages/clients/`) is a full CRUD vertical slice backed by the
+existing Django client API — the company is always the authenticated user's
+company (the frontend never sends `company_id`).
+
+| Backend endpoint | Operation | API module fn |
+|---|---|---|
+| `GET /api/clients/` | list (plain array, **no pagination**) | `listClients(params)` |
+| `GET /api/clients/:id/` | detail | `getClient(id)` |
+| `POST /api/clients/` | create (201) | `createClient(input)` |
+| `PATCH /api/clients/:id/` | partial update (200) | `updateClient(id, input)` |
+| `DELETE /api/clients/:id/` | **soft-delete** (204) | `deleteClient(id)` |
+
+- **List** — search box (`search`), status and client-type filters, all mapped
+  to the real backend query parameters and stored in the URL (refresh /
+  back-forward preserve the state). Backend validation errors are rendered
+  next to the matching fields. Cross-tenant or missing clients return 404, so
+  the detail page shows one safe "Client not found" state for both.
+- **Create** (`/clients/new`) — form with the real serializer fields
+  (`client_type`, `status`, and the matching legal-entity / individual
+  subtype). Required fields are marked; empty optional values are sent as
+  `null`.
+- **Detail** (`/clients/:clientId`) — displays the client, subtype, and the
+  read-only nested data already present in the detail response (contacts,
+  addresses, bank accounts). Nested *editing* uses separate backend endpoints
+  and is out of scope for this phase.
+- **Edit** (`/clients/:clientId/edit`) — pre-filled PATCH form. `client_type`
+  is immutable (the backend enforces this), so it is shown disabled.
+- **Delete** — soft-delete with an explicit inline confirmation step; after
+  success the app returns to the client list.
+- Errors use the typed `ApiError`: 400 field errors inline, 403 / 404 / 429 / 5xx
+  as safe messages — never raw backend internals. 401 is handled by the
+  existing refresh flow.
+
 ## API client
 
 `src/api/client.ts` is the single HTTP entry point: GET/POST/PUT/PATCH/DELETE,
@@ -116,7 +153,10 @@ trigger the refresh flow.
 /              → redirects to /dashboard
 /login         → sign-in form (outside the authenticated shell)
 /dashboard     → dashboard (protected, inside AppShell)
-/clients       → protected placeholder (inside AppShell)
+/clients       → client list (protected, inside AppShell)
+/clients/new   → create client (protected, inside AppShell)
+/clients/:clientId       → client detail (protected, inside AppShell)
+/clients/:clientId/edit  → edit client (protected, inside AppShell)
 /templates     → protected placeholder (inside AppShell)
 /documents     → protected placeholder (inside AppShell)
 *              → not found
@@ -134,8 +174,10 @@ npm test
 Vitest + Testing Library (jsdom). Tests mock `fetch` at the API-client
 boundary — no real backend needed. Coverage includes the API client, auth
 state, login page, protected routing, the application shell, the dashboard
-(loading / data / empty / error / partial-failure), and the dashboard API
-modules.
+(loading / data / empty / error / partial-failure), the dashboard API modules,
+the clients API module, and the client list / create / detail / edit pages
+(loading, success, empty, error/retry, validation, delete confirmation,
+navigation, and URL search/filter behavior).
 
 ## Known limitations
 
@@ -146,7 +188,13 @@ modules.
 - Tokens are stored in `localStorage` (standard bearer-token SPA model), which
   is subject to the usual XSS caveat; httpOnly-cookie auth would be a separate
   change.
-- The dashboard depends on the `clients.read`, `document_templates.read`, and
-  `generated_documents.read` backend permissions; unauthorized sections show a
-  safe error state rather than the data.
+- The dashboard and clients list depend on the `clients.read`,
+  `document_templates.read`, and `generated_documents.read` backend
+  permissions; unauthorized sections show a safe error state rather than the
+  data. (The full client CRUD likewise requires the matching `clients.*`
+  permissions.)
+- The client list is not paginated (the backend returns a plain array).
+- Nested client editing (addresses / contacts / bank accounts) is a separate
+  later phase; this phase only displays the read-only data already returned by
+  the client detail endpoint.
 - There is no registration, password reset, or account management UI.
