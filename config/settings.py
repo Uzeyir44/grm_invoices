@@ -1,8 +1,22 @@
 """
 Django settings for the GRM CRM project.
 
-Settings are configured via environment variables (loaded from ``.env``
-when present) so configuration stays separate from the business code.
+Settings are configured via environment variables (loaded from ``.env`` when
+present, and only outside production) so configuration stays separate from
+the business code.
+
+Operating mode
+--------------
+``DJANGO_ENV`` selects the operating mode:
+
+* ``development`` (default) — the local mode. ``DEBUG`` may be enabled and, as
+  a convenience, ``.env`` is consulted when present.
+* ``production`` — fails closed on insecure or missing configuration: it
+  requires a strong ``DJANGO_SECRET_KEY`` from the real process environment,
+  requires ``DEBUG`` to be False, requires explicit ``DJANGO_ALLOWED_HOSTS``
+  (never ``"*"``), and enables the HTTPS/browser security settings below.
+  ``.env`` is deliberately NOT read in production; every value must come from
+  the deployment environment.
 """
 
 import os
@@ -11,10 +25,18 @@ from pathlib import Path
 
 import environ
 
+from django.core.exceptions import ImproperlyConfigured
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+DJANGO_ENV = os.environ.get("DJANGO_ENV", "development").lower()
+IS_PRODUCTION = DJANGO_ENV == "production"
+
 env = environ.Env()
-environ.Env.read_env(BASE_DIR / ".env")
+if not IS_PRODUCTION:
+    # ``.env`` is a local-development convenience. It is deliberately not read
+    # in production so an accidental file can never feed production secrets.
+    environ.Env.read_env(BASE_DIR / ".env")
 
 
 def env(name, default=None):
@@ -22,20 +44,61 @@ def env(name, default=None):
     return os.environ.get(name, default)
 
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = env(
-    "DJANGO_SECRET_KEY",
-    "django-insecure-change-me-in-production",
-)
+# ---------------------------------------------------------------------------
+# Security-critical configuration (SECRET_KEY, DEBUG, ALLOWED_HOSTS).
+#
+# In production Django refuses to start when any of these is missing,
+# insecure, or debug-like. Development keeps its pre-existing permissive
+# behavior.
+# ---------------------------------------------------------------------------
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = env("DJANGO_DEBUG", "True").lower() in {"true", "1", "yes"}
+if IS_PRODUCTION:
+    secret_key = env("DJANGO_SECRET_KEY")
+    if not secret_key:
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY is required when DJANGO_ENV=production."
+        )
+    if secret_key.startswith("django-insecure-") or len(secret_key) < 50:
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY must be a strong, unique secret of at least "
+            "50 characters and must not start with 'django-insecure-' when "
+            "DJANGO_ENV=production. Generate one with "
+            "'python -c \"from django.core.management.utils import "
+            "get_random_secret_key; print(get_random_secret_key())\"'."
+        )
+    SECRET_KEY = secret_key
+
+    if env("DJANGO_DEBUG", "False").lower() in {"true", "1", "yes"}:
+        raise ImproperlyConfigured(
+            "DJANGO_DEBUG must not be enabled when DJANGO_ENV=production. "
+            "Production fails closed: set DJANGO_DEBUG=False (or unset it)."
+        )
+    DEBUG = False
+else:
+    # Local-development key. This path is unreachable in production, which
+    # never falls back to a default secret and rejects the 'django-insecure-'
+    # prefix above.
+    SECRET_KEY = env(
+        "DJANGO_SECRET_KEY",
+        "django-insecure-local-development-key",
+    )
+    DEBUG = env("DJANGO_DEBUG", "True").lower() in {"true", "1", "yes"}
 
 ALLOWED_HOSTS = [
     host.strip()
     for host in env("DJANGO_ALLOWED_HOSTS", "").split(",")
     if host.strip()
 ]
+
+if IS_PRODUCTION and not ALLOWED_HOSTS:
+    raise ImproperlyConfigured(
+        "DJANGO_ALLOWED_HOSTS must list the production host(s) when "
+        "DJANGO_ENV=production."
+    )
+if IS_PRODUCTION and "*" in ALLOWED_HOSTS:
+    raise ImproperlyConfigured(
+        "ALLOWED_HOSTS must not be '*' when DJANGO_ENV=production."
+    )
 
 # Application definition
 
@@ -228,3 +291,34 @@ SIMPLE_JWT = {
         "apps.authentication.api.serializers.CompanyTokenObtainPairSerializer"
     ),
 }
+
+# ---------------------------------------------------------------------------
+# HTTPS / browser security settings (enabled only in production).
+#
+# These assume the application is served over HTTPS to the client. If TLS is
+# terminated at a reverse proxy / load balancer in front of Django, set
+# DJANGO_TRUST_PROXY_SSL_HEADER=True so Django trusts the proxy's
+# "X-Forwarded-Proto" header instead of an unverified client-supplied value.
+# Never enable that on a host where clients talk to Django directly (a client
+# could spoof the header and bypass the HTTPS redirect).
+#
+# Deployment assumption: production is only reachable over HTTPS, either
+# directly or behind a TLS-terminating reverse proxy / load balancer.
+# ---------------------------------------------------------------------------
+if IS_PRODUCTION:
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = "DENY"
+    SECURE_REFERRER_POLICY = "same-origin"
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    # HSTS for one year; also a prerequisite for HSTS preload submission.
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    if env("DJANGO_TRUST_PROXY_SSL_HEADER", "False").lower() in {
+        "true",
+        "1",
+        "yes",
+    }:
+        SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

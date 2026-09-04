@@ -70,6 +70,43 @@ under [Future modules](#future-modules).
    python manage.py check
    ```
 
+### Configuration & operating modes
+
+Configuration is driven by environment variables (loaded from `.env` when
+present). The `DJANGO_ENV` variable selects the operating mode:
+
+- `development` (default) — the local mode. `DEBUG` may be enabled and `.env`
+  is consulted as a convenience.
+- `production` — fails closed during startup on insecure or missing
+  configuration and enables the HTTPS/browser security settings. `.env` is
+  **not** read in production; every value must come from the deployment
+  environment.
+
+Required for production (`DJANGO_ENV=production`):
+
+```text
+DJANGO_SECRET_KEY      required, >= 50 chars, must not start with 'django-insecure-'
+DJANGO_DEBUG           must be False (a missing value defaults to False; setting
+                       it to True refuses startup)
+DJANGO_ALLOWED_HOSTS   required, comma-separated host/domain list (never '*')
+```
+
+Production also enables: `SECURE_SSL_REDIRECT`, `SESSION_COOKIE_SECURE`,
+`CSRF_COOKIE_SECURE`, `SECURE_HSTS_SECONDS` (1 year, with
+`SECURE_HSTS_INCLUDE_SUBDOMAINS` / `SECURE_HSTS_PRELOAD`),
+`SECURE_CONTENT_TYPE_NOSNIFF`, `X_FRAME_OPTIONS = "DENY"` and
+`SECURE_REFERRER_POLICY = "same-origin"`.
+
+**Deployment assumption.** Production is served over HTTPS to the client and
+Django never sees plaintext HTTP. When TLS is terminated at a reverse
+proxy / load balancer in front of Django, set `DJANGO_TRUST_PROXY_SSL_HEADER=True`
+so Django trusts the proxy's `X-Forwarded-Proto` header; leave it False (the
+default) when clients can reach Django directly. Verify the deployment with:
+
+```bash
+python manage.py check --deploy
+```
+
 ## Requirements
 
 - Python 3.13+
@@ -314,20 +351,15 @@ never part of any response).
 ### Development users
 
 No users are seeded by migrations; `apps/authentication/tests/` creates its
-own fixtures per test. For manual testing against the local PostgreSQL
-database one development account was created once:
-
-```text
-company_id: 1   display: "Dev Co"   (status: active)
-email:      dev@example.com
-password:   Dev-pass-123!
-```
-
-This is local development data only — it lives in your database, not in the
-codebase. To re-create it (e.g. after a database reset), run:
+own fixtures per test. For manual testing against a local PostgreSQL database
+you can create a development account once — its credentials are local to the
+database and never belong in the repository. To create it (or re-create it
+after a database reset), run the snippet below and choose a password at the
+prompt:
 
 ```bash
 python manage.py shell <<'PY'
+from getpass import getpass
 from apps.companies.models import Company
 from apps.authentication.models import User
 
@@ -342,7 +374,7 @@ user, created = User.objects.get_or_create(
     defaults={"first_name": "Dev", "last_name": "User"},
 )
 if created:
-    user.set_password("Dev-pass-123!")
+    user.set_password(getpass("Choose a password for the dev user: "))
     user.save(update_fields=["password"])
 print(f"company_id={company.id} user_id={user.id} created={created}")
 PY
