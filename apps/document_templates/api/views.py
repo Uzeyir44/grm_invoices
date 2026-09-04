@@ -1,4 +1,8 @@
-from django.db import IntegrityError
+import uuid
+
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from django.http import FileResponse
@@ -56,6 +60,19 @@ class MethodPermissionAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return super().handle_exception(exc)
+
+
+def _template_file_upload_name(template):
+    """
+    Unique storage name for a template's current file. Every replacement gets
+    its own name, so the previous (still referenced) file can remain on disk
+    until the new file AND the database reference have been committed. The
+    'current/' subdirectory keeps current files apart from version snapshots.
+    """
+    return (
+        f"templates/company_{template.company_id}/{template.id}/current/"
+        f"current_{uuid.uuid4().hex}.docx"
+    )
 
 
 def template_object_or_404(request, pk):
@@ -217,18 +234,32 @@ class DocumentTemplateFileView(MethodPermissionAPIView):
         template = template_object_or_404(request, pk)
         serializer = DocumentTemplateFileSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        if template.file:
-            # Close any open handle first so Windows can release the lock
-            # before the underlying file is removed / overwritten.
-            template.file.close()
-            template.file.delete(save=False)
-        template.file = serializer.validated_data["file"]
-        template.save(update_fields=["file", "updated_at"])
+        content = serializer.validated_data["file"].read()
+        with transaction.atomic():
+            # Serialize concurrent replacements for the same template via the
+            # parent-row lock; each request then removes only its own
+            # predecessor (never a file committed by another request).
+            locked = DocumentTemplate.objects.select_for_update().get(pk=template.pk)
+            old_name = locked.file.name if locked.file else None
+            new_name = _template_file_upload_name(locked)
+            stored_name = default_storage.save(new_name, ContentFile(content))
+            locked.file.name = stored_name
+            try:
+                locked.save(update_fields=["file", "updated_at"])
+            except Exception:
+                # The DB update rolled back; remove the freshly stored file so
+                # a failed replacement never leaves an uncontrolled orphan.
+                default_storage.delete(stored_name)
+                raise
+        # Committed: the database now references stored_name, so the old file
+        # can finally be removed without ever breaking the template.
+        if old_name and old_name != stored_name:
+            default_storage.delete(old_name)
         return Response(
             {
-                "id": template.id,
-                "file": template.file.url if template.file else None,
-                "file_name": template.file.name if template.file else None,
+                "id": locked.id,
+                "file": locked.file.url if locked.file else None,
+                "file_name": locked.file.name if locked.file else None,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -240,11 +271,19 @@ class DocumentTemplateFileView(MethodPermissionAPIView):
                 {"detail": "This template has no file uploaded yet."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        # Close any open handle first so Windows releases the file lock.
-        template.file.close()
-        template.file.delete(save=False)
-        template.file = None
-        template.save(update_fields=["file", "updated_at"])
+        with transaction.atomic():
+            locked = DocumentTemplate.objects.select_for_update().get(pk=template.pk)
+            if not locked.file:
+                return Response(
+                    {"detail": "This template has no file uploaded yet."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            old_name = locked.file.name
+            locked.file = None
+            locked.save(update_fields=["file", "updated_at"])
+        # Committed: the database no longer references the file, so the stored
+        # file is now safe to remove.
+        default_storage.delete(old_name)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

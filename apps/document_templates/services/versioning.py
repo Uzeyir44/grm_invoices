@@ -14,6 +14,7 @@ import hashlib
 import uuid
 
 from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import Max
 
@@ -28,8 +29,7 @@ def create_version(template, uploaded_file, created_by=None):
 
     ``uploaded_file`` is read fully into memory so the version's snapshot is
     independent of the source handle (avoids holding a file lock on
-    Windows), then written back to versioned storage before the DB row is
-    saved.
+    Windows), then written to versioned storage before the DB row is saved.
 
     The next version number is computed as (highest existing + 1), protected
     against race conditions by the DB ``UNIQUE(template, version_number)``
@@ -40,6 +40,11 @@ def create_version(template, uploaded_file, created_by=None):
     activation operations for the same template are serialized and can never
     leave more than one active version (backstopped by the
     ``uq_template_version_single_active`` partial unique constraint).
+
+    Failure-safe persistence: the snapshot file is written before the DB row
+    is created. If any database write fails, the whole transaction rolls back
+    and the just-written file is deleted, so a failed version create never
+    leaves an orphaned file that looks like a committed version.
 
     Returns the created TemplateVersion.
     """
@@ -56,27 +61,34 @@ def create_version(template, uploaded_file, created_by=None):
     content = uploaded_file.read()
     checksum = hashlib.sha256(content).hexdigest()
 
+    storage_path = (
+        f"templates/company_{template.company_id}/{template.id}/"
+        f"v{next_number}_{uuid.uuid4().hex}.docx"
+    )
+    stored_name = default_storage.save(storage_path, ContentFile(content))
+
     version = TemplateVersion(
         template=template,
         company=template.company,
         version_number=next_number,
         checksum=checksum,
         created_by=created_by,
+        storage_path=stored_name,
     )
-    version.storage_path = (
-        f"templates/company_{template.company_id}/{template.id}/"
-        f"v{next_number}_{uuid.uuid4().hex}.docx"
-    )
-    version.file.save(
-        version.storage_path, ContentFile(content), save=False
-    )
+    version.file.name = stored_name
 
-    # Atomically clear any other active version and mark this one active.
-    TemplateVersion.objects.filter(template=template, is_active=True).update(
-        is_active=False
-    )
-    version.is_active = True
-    version.save()
+    try:
+        # Atomically clear any other active version and mark this one active.
+        TemplateVersion.objects.filter(template=template, is_active=True).update(
+            is_active=False
+        )
+        version.is_active = True
+        version.save()
+    except Exception:
+        # The DB transaction rolled back; remove the snapshot file that was
+        # already written so it cannot linger as an unmanaged orphan.
+        default_storage.delete(stored_name)
+        raise
     return version
 
 
