@@ -47,6 +47,11 @@ def make_user(
 
 class AuthenticationAPITestCase(APITestCase):
     def setUp(self):
+        # Login/refresh throttles key on the client IP (shared by every test),
+        # so reset the throttle cache to keep each test deterministic.
+        from django.core.cache import cache
+
+        cache.clear()
         self.company_a = make_company()
         self.company_b = make_company()
         self.alice_a = make_user(self.company_a, email="alice@example.com")

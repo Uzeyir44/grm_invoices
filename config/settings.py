@@ -278,6 +278,22 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    # Abuse protection (opt-in per view): ScopedRateThrottle only throttles
+    # views that set `throttle_scope`; ordinary read/list endpoints are never
+    # rate-limited. Authenticated scopes key on the authenticated user id,
+    # and unauthenticated scopes (login/refresh) key on the client IP, so one
+    # tenant can never exhaust another tenant's bucket. Rates are
+    # configuration-driven (see .env.example).
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.ScopedRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "auth_login": env("DRF_THROTTLE_AUTH_LOGIN", "10/min"),
+        "auth_refresh": env("DRF_THROTTLE_TOKEN_REFRESH", "20/min"),
+        "document_creation": env("DRF_THROTTLE_DOCUMENT_CREATION", "60/hour"),
+        "document_generation": env("DRF_THROTTLE_DOCUMENT_GENERATION", "30/hour"),
+        "pdf_generation": env("DRF_THROTTLE_PDF_GENERATION", "30/hour"),
+    },
 }
 
 # Django REST Framework SimpleJWT configuration.

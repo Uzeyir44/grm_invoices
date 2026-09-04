@@ -130,6 +130,27 @@ MAX_REQUEST_BODY_SIZE     max HTTP request body in bytes (413 on exceed, applied
 web server is deployed, it may additionally enforce its own (ideally equal or
 stricter) body cap.
 
+**API throttling.** DRF scoped throttling protects the expensive/abuse-prone
+endpoints (opt-in per view; ordinary read/list endpoints are not rate-limited):
+
+```text
+POST /api/authentication/token/                      auth_login     (per IP)
+POST /api/authentication/token/refresh/              auth_refresh   (per IP)
+POST /api/generated-documents/                       document_creation
+POST /api/generated-documents/<id>/generate/         document_generation
+POST /api/generated-documents/versions/<id>/generate-pdf/  pdf_generation
+```
+
+Rates default to `10/min`, `20/min`, `60/hour`, `30/hour` and `30/hour`
+respectively and are configuration-driven (`DRF_THROTTLE_*` environment
+variables). Authenticated scopes are keyed on the authenticated user id (an
+expensive operation by one tenant can never exhaust another tenant's bucket);
+unauthenticated login/refresh are keyed on the client IP. Throttled requests
+return the standard DRF **429** response. Note: DRF throttling relies on
+Django's cache — multi-worker production deployments should use a shared cache
+backend (e.g. Redis) so throttling is consistent across workers; the local
+memory cache is sufficient for single-process development.
+
 ## Requirements
 
 - Python 3.13+

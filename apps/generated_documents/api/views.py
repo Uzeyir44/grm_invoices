@@ -35,6 +35,7 @@ from apps.generated_documents.api.serializers import (
     GeneratedDocumentSerializer,
     GeneratedDocumentVersionSerializer,
 )
+from apps.generated_documents.api.throttles import WriteScopedRateThrottle
 from apps.generated_documents.models import GeneratedDocument, GeneratedDocumentVersion
 from apps.generated_documents.services.context import GenerationContextError
 from apps.generated_documents.services.document_creation import (
@@ -160,6 +161,10 @@ class GeneratedDocumentListView(MethodPermissionAPIView):
         "POST": "generated_documents.generate",
     }
 
+    # Only the (expensive) create is throttled; the cheap GET list is not.
+    throttle_classes = [WriteScopedRateThrottle]
+    throttle_scope = "document_creation"
+
     def get(self, request):
         queryset = (
             tenant_queryset(GeneratedDocument, request.user.company)
@@ -221,6 +226,7 @@ class GeneratedDocumentGenerateView(MethodPermissionAPIView):
     """
 
     method_permissions = {"POST": "generated_documents.generate"}
+    throttle_scope = "document_generation"
 
     def post(self, request, pk):
         document = document_object_or_404(request, pk)
@@ -297,6 +303,7 @@ class GeneratedDocumentVersionGeneratePdfView(MethodPermissionAPIView):
     """
 
     method_permissions = {"POST": "generated_documents.generate"}
+    throttle_scope = "pdf_generation"
 
     def post(self, request, version_id):
         version = version_object_or_404(request, version_id)
