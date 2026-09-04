@@ -3,11 +3,14 @@
 Frontend application for the GRM CRM Django backend.
 
 Implemented so far:
+- **Application shell + dashboard** (Phase 3): authenticated shell (responsive
+  sidebar, header, sign-out), real-data dashboard.
 - **Authentication vertical slice** (Phase 2): login, token storage, `/me`
   initialization, protected routes, automatic access-token refresh, logout.
 - **Technical foundation** (Phase 1): routing, Tailwind, the generic API
-  client, the typed error model. No business features (clients, templates,
-  generated documents, dashboard content) are implemented yet.
+  client, the typed error model.
+- No business features (client CRUD, template management, document
+  generation/PDF UI) are implemented yet — those routes are placeholders.
 
 ## Stack
 
@@ -41,72 +44,109 @@ npm run build       # production build (typecheck + Vite build)
 npm run preview     # preview the production build
 ```
 
+## Application shell
+
+The authenticated area renders through `AppShell` (`src/components/layout/`):
+
+- **Sidebar** — navigation for Dashboard, Clients, Templates, Documents
+  (all live router links; the active route is marked with `aria-current`). On
+  mobile the sidebar becomes an overlay toggled from the header.
+- **Header** — the authenticated company name, user display name, and email
+  (from `AuthContext`), plus a **Sign out** button. Optional values are simply
+  omitted when missing.
+- Signing out clears both tokens and the in-memory auth state via
+  `AuthContext.logout()`; the protected route then redirects to `/login`.
+
+## Dashboard
+
+`/dashboard` (`src/pages/dashboard/`) is a real, read-only dashboard. Every
+number is derived from existing backend list endpoints for the caller's
+company — nothing is fabricated:
+
+| Section | Backend endpoint | Shape |
+|---|---|---|
+| Clients | `GET /api/clients/` | array of `ClientSummary` |
+| Templates | `GET /api/document-templates/` | array of `DocumentTemplate` |
+| Documents | `GET /api/generated-documents/` | array of `GeneratedDocument` |
+
+It shows client/template/document counts (from `data.length`), a welcome line,
+the company name, and the five most recent documents (newest first) with
+number, type, status, and date. Each section has its own loading state, empty
+state ("No clients yet."), and safe error state with a retry action; a failing
+section never takes down the rest of the page. There is deliberately **no**
+backend summary endpoint and no fabricated dashboard statistics.
+
+## API client
+
+`src/api/client.ts` is the single HTTP entry point: GET/POST/PUT/PATCH/DELETE,
+JSON and FormData bodies, automatic bearer-token header, 401 → refresh → retry
+once, and conversion of every failed response into a typed `ApiError` (status,
+payload, `fieldErrors`, `Retry-After`, safe message). Small read-only modules
+built on it for the dashboard: `src/api/clients.ts`, `templates.ts`,
+`documents.ts` (no business features behind them yet).
+
 ## Authentication flow
 
 Backed by the Django API (`apps/authentication`) with company-scoped email
 logins:
 
-1. `POST /api/authentication/token/` with
-   `{ company_id, email, password }` — `company_id` is required because email is
-   unique per company, not globally. Success returns `{ access, refresh }`.
-2. The tokens are stored in `localStorage` (see `src/utils/authStorage.ts`) and
-   the client fetches `GET /api/authentication/me/` to load the current user,
+1. `POST /api/authentication/token/` with `{ company_id, email, password }` —
+   `company_id` is required because email is unique per company. Success
+   returns `{ access, refresh }`.
+2. Tokens are stored in `localStorage` (see `src/utils/authStorage.ts`) and
+   the client fetches `GET /api/authentication/me/` for the current user,
    company, and — when the backend provides them — permissions.
-3. `AuthProvider` (React context, `src/contexts/AuthContext.tsx`) exposes
-   `status`, `user`, `companyId`, `companyName`, `permissions`,
-   `hasPermission(code)`, `login`, and `logout`.
-4. `ProtectedRoute` blocks the application area while signed out and during
-   initialization; an authenticated visitor on `/login` is redirected to
-   `/dashboard`.
+3. `AuthProvider` (React context) exposes `status`, `user`, `companyId`,
+   `companyName`, `permissions`, `hasPermission(code)`, `login`, `logout`.
+4. `ProtectedRoute` guards the application area (also during initialization);
+   an authenticated visitor on `/login` is redirected to `/dashboard`.
 
 ### Automatic token refresh
 
-The API client (`src/api/client.ts`) handles expired access tokens:
+The API client handles expired access tokens: a 401 triggers one refresh
+(`POST /api/authentication/token/refresh/` with the stored refresh token) and
+retries the original request exactly once; concurrent 401s share a single
+in-flight refresh. If the refresh fails, both tokens are cleared, subscribers
+are notified, and the user returns to `/login`. Login/refresh requests never
+trigger the refresh flow.
 
-- an authenticated request returning **401** triggers one refresh
-  (`POST /api/authentication/token/refresh/` with the stored refresh token) and
-  retries the original request exactly once;
-- concurrent 401s share a single in-flight refresh request;
-- if the refresh fails, both tokens are cleared, `onUnauthorized` subscribers
-  (the auth context) are notified, and the user returns to `/login`;
-- login/refresh requests (`auth: false`) never trigger the refresh flow.
-
-### Logout
-
-`logout()` clears both tokens and the in-memory auth state. There is no backend
-logout/revocation endpoint, so logout is client-side only (and still works when
-the backend is unreachable).
-
-### Routes
+## Routes
 
 ```text
 /              → redirects to /dashboard
-/login         → sign-in form (company ID, email, password)
-/dashboard     → protected placeholder
-/clients       → protected placeholder
-/templates     → protected placeholder
-/documents     → protected placeholder
+/login         → sign-in form (outside the authenticated shell)
+/dashboard     → dashboard (protected, inside AppShell)
+/clients       → protected placeholder (inside AppShell)
+/templates     → protected placeholder (inside AppShell)
+/documents     → protected placeholder (inside AppShell)
 *              → not found
 ```
 
-Route protection is UX-only; the Django backend remains authoritative for
-authorization and tenant isolation.
+Route protection is UX-only; the Django backend remains the authoritative
+authorization and tenant-isolation boundary.
 
-## API client
+## Testing
 
-`src/api/client.ts` is the single HTTP entry point: GET/POST/PUT/PATCH/DELETE,
-JSON and FormData bodies, automatic bearer-token header, and conversion of every
-failed response into a typed `ApiError` (status, payload, `fieldErrors`,
-`Retry-After`, safe message). UI code reacts to 400 / 401 / 403 / 404 / 413 /
-429 / 500 via the `HTTP_STATUS` constants without parsing raw strings.
+```bash
+npm test
+```
+
+Vitest + Testing Library (jsdom). Tests mock `fetch` at the API-client
+boundary — no real backend needed. Coverage includes the API client, auth
+state, login page, protected routing, the application shell, the dashboard
+(loading / data / empty / error / partial-failure), and the dashboard API
+modules.
 
 ## Known limitations
 
 - The backend `/me` response currently **does not** include a permissions
-  field, so `permissions` is empty and `hasPermission()` returns `false` —
-  the frontend grants nothing. The wiring will light up automatically if the
-  backend starts returning `permissions` on `/me`.
-- Tokens are stored in `localStorage` (standard bearer-token SPA model). This
-  is subject to the usual XSS caveat; moving to httpOnly-cookie auth would be a
-  separate, later change.
+  field, so `permissions` is empty and `hasPermission()` returns `false` — the
+  frontend grants nothing. The wiring will light up if the backend starts
+  returning `permissions` on `/me`.
+- Tokens are stored in `localStorage` (standard bearer-token SPA model), which
+  is subject to the usual XSS caveat; httpOnly-cookie auth would be a separate
+  change.
+- The dashboard depends on the `clients.read`, `document_templates.read`, and
+  `generated_documents.read` backend permissions; unauthorized sections show a
+  safe error state rather than the data.
 - There is no registration, password reset, or account management UI.

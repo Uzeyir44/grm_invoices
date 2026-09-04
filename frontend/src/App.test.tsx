@@ -47,31 +47,56 @@ describe('App', () => {
     vi.unstubAllGlobals()
   })
 
+  /** Real /me response plus empty (but valid) list responses for dashboard. */
+  function stubBackend() {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/authentication/me/')) return Promise.resolve(jsonResponse(200, ME))
+      if (url.includes('/clients/')) return Promise.resolve(jsonResponse(200, []))
+      if (url.includes('/document-templates/')) {
+        return Promise.resolve(jsonResponse(200, []))
+      }
+      if (url.includes('/generated-documents/')) {
+        return Promise.resolve(jsonResponse(200, []))
+      }
+      return Promise.resolve(jsonResponse(200, {}))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+  }
+
   it('redirects an unauthenticated user from a protected route to login', async () => {
     renderAt('/dashboard')
     expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: /dashboard/i })).not.toBeInTheDocument()
   })
 
-  it('grants an authenticated user access to the dashboard shell', async () => {
+  it('grants an authenticated user access to the dashboard inside the shell', async () => {
     setAccessToken('token-1')
-    fetchMock.mockResolvedValue(jsonResponse(200, ME))
+    stubBackend()
 
     renderAt('/dashboard')
 
     expect(
       await screen.findByRole('navigation', { name: /main navigation/i }),
     ).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: /dashboard/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /dashboard/i })).toBeInTheDocument()
   })
 
   it('redirects an authenticated user away from /login to the dashboard', async () => {
     setAccessToken('token-1')
-    fetchMock.mockResolvedValue(jsonResponse(200, ME))
+    stubBackend()
 
     renderAt('/login')
 
     expect(await screen.findByRole('heading', { name: /dashboard/i })).toBeInTheDocument()
+  })
+
+  it('keeps the application shell (navigation) out of /login', async () => {
+    renderAt('/login')
+    expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('navigation', { name: /main navigation/i }),
+    ).not.toBeInTheDocument()
   })
 
   it('shows a loading state instead of redirecting while auth initializes', async () => {
@@ -86,13 +111,25 @@ describe('App', () => {
 
   it('lets an authenticated user navigate between protected sections', async () => {
     setAccessToken('token-1')
-    fetchMock.mockResolvedValue(jsonResponse(200, ME))
+    stubBackend()
     const user = userEvent.setup()
     renderAt('/dashboard')
 
     await screen.findByRole('heading', { name: /dashboard/i })
     await user.click(screen.getByRole('link', { name: /clients/i }))
     expect(await screen.findByRole('heading', { name: /clients/i })).toBeInTheDocument()
+  })
+
+  it('redirects to login after signing out', async () => {
+    setAccessToken('token-1')
+    stubBackend()
+    const user = userEvent.setup()
+    renderAt('/dashboard')
+
+    await screen.findByRole('heading', { name: /dashboard/i })
+    await user.click(screen.getByRole('button', { name: /sign out/i }))
+
+    expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument()
   })
 
   it('renders a not-found page for unknown routes', async () => {
