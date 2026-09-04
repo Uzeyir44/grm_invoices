@@ -8,7 +8,7 @@ from rest_framework import serializers
 
 from apps.document_templates.models import DocumentTemplate, TemplateVersion
 
-MAX_TEMPLATE_FILE_SIZE = getattr(settings, "MAX_TEMPLATE_FILE_SIZE", 5 * 1024 * 1024)
+DEFAULT_MAX_TEMPLATE_FILE_SIZE = 5 * 1024 * 1024
 ALLOWED_TEMPLATE_EXTENSIONS = {".docx"}
 OOXML_MEMBERS = {"[Content_Types].xml", "word/document.xml"}
 
@@ -86,9 +86,14 @@ class DocumentTemplateFileSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 "Only .docx template files are supported."
             )
-        if value.size is None or value.size > MAX_TEMPLATE_FILE_SIZE:
+        # Limit read from settings per request so it stays consistent with
+        # the configured environment (and is testable via override_settings).
+        max_size = getattr(
+            settings, "MAX_TEMPLATE_FILE_SIZE", DEFAULT_MAX_TEMPLATE_FILE_SIZE
+        )
+        if value.size is None or value.size > max_size:
             raise serializers.ValidationError(
-                f"The file must be at most {MAX_TEMPLATE_FILE_SIZE} bytes."
+                f"The file must be at most {max_size} bytes."
             )
         try:
             with ZipFile(BytesIO(value.read())):

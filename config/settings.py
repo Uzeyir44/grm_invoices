@@ -136,6 +136,9 @@ AUTHENTICATION_BACKENDS = [
 ]
 
 MIDDLEWARE = [
+    # Application-level request-resource guard: rejects oversized request
+    # bodies (Content-Length > MAX_REQUEST_BODY_SIZE) before any processing.
+    "config.middleware.RequestBodySizeLimitMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -233,6 +236,17 @@ MEDIA_ROOT = BASE_DIR / "media"
 # Maximum allowed size (bytes) for an uploaded document template file.
 # Templates are .docx only; the limit is checked at the API layer.
 MAX_TEMPLATE_FILE_SIZE = int(env("MAX_TEMPLATE_FILE_SIZE", 5 * 1024 * 1024))
+
+# Maximum number of line items accepted in a single generated-document create
+# request. Enforced at the API layer (before any document generation runs);
+# oversized requests are rejected with 400, never truncated.
+MAX_DOCUMENT_LINE_ITEMS = int(env("MAX_DOCUMENT_LINE_ITEMS", 500))
+
+# Maximum HTTP request body size (bytes). Requests advertising a larger
+# Content-Length are rejected with 413 (RequestBodySizeLimitMiddleware) before
+# any serializer/view processing. This is an application-level guard; a
+# reverse proxy / web server may additionally enforce its own body cap.
+MAX_REQUEST_BODY_SIZE = int(env("MAX_REQUEST_BODY_SIZE", 10 * 1024 * 1024))
 
 # LibreOffice binary used to convert generated DOCX files to PDF
 # (document generation Step 4.5). Leave empty to auto-discover via PATH and

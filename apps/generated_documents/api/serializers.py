@@ -9,6 +9,8 @@ storage paths.
 
 from decimal import Decimal
 
+from django.conf import settings
+
 from rest_framework import serializers
 
 from apps.generated_documents.models import GeneratedDocument, GeneratedDocumentVersion
@@ -125,6 +127,10 @@ class GeneratedDocumentCreateSerializer(serializers.Serializer):
     client → 404). The initial version's currency is provided via
     ``currency_id`` (V1 requirement), and line items — when supplied — are
     validated field-by-field here.
+
+    Line items are limited to ``settings.MAX_DOCUMENT_LINE_ITEMS`` so an
+    unbounded request cannot reach document generation; oversized requests are
+    rejected with 400 before any expensive processing.
     """
 
     client_id = serializers.IntegerField()
@@ -133,3 +139,11 @@ class GeneratedDocumentCreateSerializer(serializers.Serializer):
     items = GeneratedDocumentLineItemInputSerializer(
         many=True, required=False, allow_empty=True
     )
+
+    def validate_items(self, value):
+        max_items = getattr(settings, "MAX_DOCUMENT_LINE_ITEMS", 500)
+        if len(value) > max_items:
+            raise serializers.ValidationError(
+                f"At most {max_items} line items are allowed per document."
+            )
+        return value

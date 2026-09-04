@@ -115,6 +115,21 @@ Do **not** configure the production web server to serve `MEDIA_ROOT`/`/media/`
 publicly; keep it private. The API never advertises a public `MEDIA_URL`
 path.
 
+**Resource limits.** Application-level guards protect expensive or unbounded
+requests (overrideable via environment variables):
+
+```text
+MAX_DOCUMENT_LINE_ITEMS   max line items per generated-document create (400
+                          on exceed, before generation). Default 500.
+MAX_TEMPLATE_FILE_SIZE    max uploaded .docx template size in bytes. Default 5 MB.
+MAX_REQUEST_BODY_SIZE     max HTTP request body in bytes (413 on exceed, applied
+                          by Django middleware before any processing). Default 10 MB.
+```
+
+`MAX_REQUEST_BODY_SIZE` is an application-level check; if a reverse proxy /
+web server is deployed, it may additionally enforce its own (ideally equal or
+stricter) body cap.
+
 ## Requirements
 
 - Python 3.13+
