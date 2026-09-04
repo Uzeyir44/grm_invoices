@@ -1,7 +1,12 @@
 import { ApiError } from '../types/api'
 import type { ApiErrorPayload, ApiFieldErrors } from '../types/api'
 import { fallbackMessageForStatus } from '../types/api'
-import { getAccessToken } from '../utils/authStorage'
+import {
+  clearAuthTokens,
+  getAccessToken,
+  getRefreshToken,
+  setAccessToken,
+} from '../utils/authStorage'
 
 /**
  * Single HTTP entry point for the existing Django REST API.
@@ -10,11 +15,12 @@ import { getAccessToken } from '../utils/authStorage'
  * * Attaches the JWT access token as `Authorization: Bearer …` when present.
  * * Supports JSON and FormData bodies (multipart boundary left to the browser).
  * * Converts every failed response into a typed {@link ApiError} carrying the
- *   backend payload, field errors, and a stable HTTP status, so future UI code
- *   never parses raw strings or reads backend stack traces.
- *
- * Individual business modules (auth, clients, templates, documents) will build
- * on this client; nothing endpoint-specific is implemented yet.
+ *   backend payload, field errors, and a stable HTTP status, so UI code never
+ *   parses raw strings or reads backend stack traces.
+ * * On a **401** it transparently attempts one access-token refresh (shared by
+ *   all concurrent requests) and retries the original request exactly once.
+ *   If the refresh cannot recover, it clears both tokens and notifies
+ *   subscribers via {@link onUnauthorized}.
  */
 
 const DEFAULT_BASE_URL = '/api'
@@ -33,7 +39,9 @@ export interface ApiRequestOptions {
   /** Serialized as JSON unless it is a `FormData` instance. */
   body?: unknown
   headers?: HeadersInit
-  /** Set `false` to skip attaching the access token (e.g. public endpoints). */
+  /** Set `false` to skip attaching the access token (e.g. public endpoints).
+   *  The automatic 401 → refresh → retry flow is also skipped for these
+   *  requests, so login/refresh never recurse. */
   auth?: boolean
   signal?: AbortSignal
 }
@@ -117,9 +125,73 @@ async function parseSuccess<T>(response: Response): Promise<T> {
   }
 }
 
-async function request<T>(
+// ---------------------------------------------------------------------------
+// Automatic access-token refresh (single-flight).
+// ---------------------------------------------------------------------------
+
+const unauthorizedListeners = new Set<() => void>()
+
+/** Subscribe to unrecoverable authentication failures (tokens were cleared). */
+export function onUnauthorized(listener: () => void): () => void {
+  unauthorizedListeners.add(listener)
+  return () => {
+    unauthorizedListeners.delete(listener)
+  }
+}
+
+function notifyUnauthorized(): void {
+  for (const listener of unauthorizedListeners) {
+    listener()
+  }
+}
+
+let activeRefresh: Promise<boolean> | null = null
+
+async function performRefresh(): Promise<boolean> {
+  const refreshToken = getRefreshToken()
+  if (!refreshToken) {
+    return false
+  }
+  try {
+    const data = await executeRequest<unknown>(
+      '/authentication/token/refresh/',
+      { method: 'POST', body: { refresh: refreshToken }, auth: false },
+      true,
+    )
+    const access = (data as { access?: unknown } | null)?.access
+    if (typeof access !== 'string') {
+      return false
+    }
+    setAccessToken(access)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Refresh the access token once. Concurrent callers share a single in-flight
+ * refresh, so a burst of simultaneous 401 responses only produces one request
+ * to the refresh endpoint.
+ */
+function refreshAccessToken(): Promise<boolean> {
+  if (activeRefresh) {
+    return activeRefresh
+  }
+  activeRefresh = performRefresh().finally(() => {
+    activeRefresh = null
+  })
+  return activeRefresh
+}
+
+// ---------------------------------------------------------------------------
+// Core request execution.
+// ---------------------------------------------------------------------------
+
+async function executeRequest<T>(
   path: string,
-  options: ApiRequestOptions = {},
+  options: ApiRequestOptions,
+  retried: boolean,
 ): Promise<T> {
   const { method = 'GET', body, headers: extraHeaders, auth = true, signal } =
     options
@@ -148,10 +220,30 @@ async function request<T>(
     signal,
   })
 
+  // Recover from an expired access token: refresh once, retry the original
+  // request exactly once. Refreshing is skipped for public (auth:false)
+  // requests, so login/refresh never recurse, and never on an already-retried
+  // request.
+  if (response.status === 401 && auth && !retried) {
+    const refreshed = await refreshAccessToken()
+    if (refreshed) {
+      return executeRequest<T>(path, options, true)
+    }
+    clearAuthTokens()
+    notifyUnauthorized()
+  }
+
   if (!response.ok) {
     throw await toApiError(response)
   }
   return parseSuccess<T>(response)
+}
+
+async function request<T>(
+  path: string,
+  options: ApiRequestOptions = {},
+): Promise<T> {
+  return executeRequest<T>(path, options, false)
 }
 
 export const apiClient = {

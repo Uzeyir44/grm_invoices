@@ -2,29 +2,44 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 
 import { AppShell } from '../components/layout/AppShell'
 import { AuthLayout } from '../components/layout/AuthLayout'
-import { AuthIndexPage } from '../pages/auth/AuthIndexPage'
+import { LoginPage } from '../pages/auth/LoginPage'
 import { ClientsIndexPage } from '../pages/clients/ClientsIndexPage'
 import { DashboardIndexPage } from '../pages/dashboard/DashboardIndexPage'
 import { DocumentsIndexPage } from '../pages/documents/DocumentsIndexPage'
 import { NotFoundPage } from '../pages/NotFoundPage'
 import { TemplatesIndexPage } from '../pages/templates/TemplatesIndexPage'
+import { ProtectedRoute } from './ProtectedRoute'
+import { RedirectIfAuthenticated } from './RedirectIfAuthenticated'
 
 /**
- * Application route tree. Only foundation placeholders exist so far:
- * `/auth`, `/dashboard`, `/clients`, `/templates`, `/documents`.
+ * Application route tree.
+ *
+ * * The application area (`/dashboard`, `/clients`, `/templates`,
+ *   `/documents`) is wrapped in {@link ProtectedRoute}.
+ * * `/login` is signed-out-only; authenticated users go straight to the
+ *   dashboard.
  */
 export function AppRouter() {
   return (
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<DashboardIndexPage />} />
-        <Route path="clients" element={<ClientsIndexPage />} />
-        <Route path="templates" element={<TemplatesIndexPage />} />
-        <Route path="documents" element={<DocumentsIndexPage />} />
+        <Route element={<ProtectedRoute />}>
+          <Route path="dashboard" element={<DashboardIndexPage />} />
+          <Route path="clients" element={<ClientsIndexPage />} />
+          <Route path="templates" element={<TemplatesIndexPage />} />
+          <Route path="documents" element={<DocumentsIndexPage />} />
+        </Route>
       </Route>
-      <Route path="auth" element={<AuthLayout />}>
-        <Route index element={<AuthIndexPage />} />
+      <Route path="login" element={<AuthLayout />}>
+        <Route
+          index
+          element={
+            <RedirectIfAuthenticated>
+              <LoginPage />
+            </RedirectIfAuthenticated>
+          }
+        />
       </Route>
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

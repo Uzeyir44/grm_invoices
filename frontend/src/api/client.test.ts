@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { apiClient } from './client'
+import { apiClient, onUnauthorized } from './client'
 import { ApiError, HTTP_STATUS } from '../types/api'
-import { clearAccessToken, setAccessToken } from '../utils/authStorage'
+import {
+  clearAuthTokens,
+  getAccessToken,
+  getRefreshToken,
+  setAccessToken,
+  setRefreshToken,
+} from '../utils/authStorage'
 
 function jsonResponse(status: number, body: unknown, headers?: Record<string, string>) {
   return new Response(JSON.stringify(body), {
@@ -15,7 +21,7 @@ describe('apiClient', () => {
 
   afterEach(() => {
     localStorage.clear()
-    clearAccessToken()
+    clearAuthTokens()
     vi.unstubAllGlobals()
   })
 
@@ -146,6 +152,115 @@ describe('apiClient', () => {
     expect(HTTP_STATUS.NOT_FOUND).toBe(404)
     expect(HTTP_STATUS.PAYLOAD_TOO_LARGE).toBe(413)
     expect(HTTP_STATUS.TOO_MANY_REQUESTS).toBe(429)
+  })
+
+  describe('automatic token refresh on 401', () => {
+    function stubSequence(...responses: Response[]) {
+      responses.forEach((response) => fetchMock.mockResolvedValueOnce(response))
+      vi.stubGlobal('fetch', fetchMock)
+    }
+
+    it('refreshes the access token once and retries the original request', async () => {
+      setAccessToken('expired')
+      setRefreshToken('refresh-1')
+      stubSequence(
+        jsonResponse(401, { detail: 'Token is invalid or expired', code: 'token_not_valid' }),
+        jsonResponse(200, { access: 'fresh' }),
+        jsonResponse(200, { ok: true }),
+      )
+
+      await expect(apiClient.get('/me')).resolves.toEqual({ ok: true })
+
+      const calls = fetchMock.mock.calls as [string, RequestInit][]
+      expect(calls).toHaveLength(3)
+      // The refresh request is public: no bearer header, refresh token in body.
+      expect(calls[1][0]).toBe('/api/authentication/token/refresh/')
+      expect(new Headers(calls[1][1].headers).get('Authorization')).toBeNull()
+      expect(calls[1][1].body).toBe(JSON.stringify({ refresh: 'refresh-1' }))
+      // The retried request used the fresh access token.
+      expect(new Headers(calls[2][1].headers).get('Authorization')).toBe('Bearer fresh')
+      expect(getAccessToken()).toBe('fresh')
+    })
+
+    it('shares a single refresh across concurrent 401 responses', async () => {
+      setAccessToken('expired')
+      setRefreshToken('refresh-1')
+      stubSequence(
+        jsonResponse(401, { detail: 'expired' }),
+        jsonResponse(401, { detail: 'expired' }),
+        jsonResponse(200, { access: 'fresh' }),
+        jsonResponse(200, { a: 1 }),
+        jsonResponse(200, { b: 2 }),
+      )
+
+      const [a, b] = await Promise.all([apiClient.get('/a'), apiClient.get('/b')])
+      expect(a).toEqual({ a: 1 })
+      expect(b).toEqual({ b: 2 })
+
+      const refreshCalls = fetchMock.mock.calls.filter(([url]) =>
+        String(url).includes('/authentication/token/refresh/'),
+      )
+      expect(refreshCalls).toHaveLength(1)
+    })
+
+    it('clears tokens and notifies subscribers when refresh fails', async () => {
+      setAccessToken('expired')
+      setRefreshToken('refresh-1')
+      stubSequence(
+        jsonResponse(401, { detail: 'expired' }),
+        jsonResponse(401, { detail: 'Token is invalid or expired', code: 'token_not_valid' }),
+      )
+      const listener = vi.fn()
+      const unsubscribe = onUnauthorized(listener)
+
+      const error = await expectRejects(apiClient.get('/me'))
+      expect(error.status).toBe(HTTP_STATUS.UNAUTHORIZED)
+      expect(listener).toHaveBeenCalledTimes(1)
+      expect(getAccessToken()).toBeNull()
+      expect(getRefreshToken()).toBeNull()
+      unsubscribe()
+    })
+
+    it('does not retry a request that was already retried once', async () => {
+      setAccessToken('expired')
+      setRefreshToken('refresh-1')
+      stubSequence(
+        jsonResponse(401, { detail: 'expired' }), // original
+        jsonResponse(200, { access: 'fresh' }), // refresh
+        jsonResponse(401, { detail: 'expired' }), // retry is also 401
+      )
+      vi.stubGlobal('fetch', fetchMock)
+
+      const error = await expectRejects(apiClient.get('/me'))
+      expect(error.status).toBe(HTTP_STATUS.UNAUTHORIZED)
+      // original + refresh + single retry — no second refresh.
+      expect(fetchMock.mock.calls).toHaveLength(3)
+      const refreshCount = fetchMock.mock.calls.filter(([url]) =>
+        String(url).includes('/authentication/token/refresh/'),
+      ).length
+      expect(refreshCount).toBe(1)
+    })
+
+    it('does not attempt a refresh for public requests (e.g. login)', async () => {
+      setAccessToken('expired')
+      setRefreshToken('refresh-1')
+      stubSequence(jsonResponse(401, { detail: 'No active account found' }))
+      const listener = vi.fn()
+      const unsubscribe = onUnauthorized(listener)
+
+      const error = await expectRejects(
+        apiClient.post(
+          '/authentication/token/',
+          { company_id: 1, email: 'a@b.c', password: 'x' },
+          { auth: false },
+        ),
+      )
+      expect(error.status).toBe(HTTP_STATUS.UNAUTHORIZED)
+      expect(fetchMock.mock.calls).toHaveLength(1)
+      expect(listener).not.toHaveBeenCalled()
+      expect(getAccessToken()).toBe('expired')
+      unsubscribe()
+    })
   })
 })
 
