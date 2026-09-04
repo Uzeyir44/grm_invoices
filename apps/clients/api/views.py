@@ -1,4 +1,4 @@
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -133,20 +133,24 @@ class ClientListCreateView(MethodPermissionAPIView):
             context={"request": request, "company": request.user.company},
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save(company=request.user.company)
-        client = serializer.instance
-        meta = request_metadata(request)
-        create_audit_log(
-            company=client.company,
-            user=request.user,
-            action="create",
-            entity_type="client",
-            entity_id=client.id,
-            previous_values=None,
-            new_values=_client_snapshot(client),
-            ip_address=meta["ip_address"],
-            user_agent=meta["user_agent"],
-        )
+        # The whole logical create (base Client row + subtype + audit event)
+        # runs in one transaction: a subtype or audit failure rolls back the
+        # base Client row so no partial client can remain.
+        with transaction.atomic():
+            serializer.save(company=request.user.company)
+            client = serializer.instance
+            meta = request_metadata(request)
+            create_audit_log(
+                company=client.company,
+                user=request.user,
+                action="create",
+                entity_type="client",
+                entity_id=client.id,
+                previous_values=None,
+                new_values=_client_snapshot(client),
+                ip_address=meta["ip_address"],
+                user_agent=meta["user_agent"],
+            )
         return Response(
             ClientSerializer(
                 serializer.instance,
@@ -187,24 +191,28 @@ class ClientDetailView(MethodPermissionAPIView):
             context={"request": request, "company": request.user.company},
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        after = _client_snapshot(
-            Client.objects.get(pk=serializer.instance.pk)
-        )
-        previous, new = diff_snapshots(before, after)
-        if previous or new:
-            meta = request_metadata(request)
-            create_audit_log(
-                company=client.company,
-                user=request.user,
-                action="update",
-                entity_type="client",
-                entity_id=client.id,
-                previous_values=previous,
-                new_values=new,
-                ip_address=meta["ip_address"],
-                user_agent=meta["user_agent"],
+        # The whole logical update (base Client row + subtype + audit event)
+        # runs in one transaction: a subtype or audit failure rolls back the
+        # base Client change so no partial update can remain.
+        with transaction.atomic():
+            serializer.save()
+            after = _client_snapshot(
+                Client.objects.get(pk=serializer.instance.pk)
             )
+            previous, new = diff_snapshots(before, after)
+            if previous or new:
+                meta = request_metadata(request)
+                create_audit_log(
+                    company=client.company,
+                    user=request.user,
+                    action="update",
+                    entity_type="client",
+                    entity_id=client.id,
+                    previous_values=previous,
+                    new_values=new,
+                    ip_address=meta["ip_address"],
+                    user_agent=meta["user_agent"],
+                )
         return Response(
             ClientSerializer(
                 serializer.instance,
