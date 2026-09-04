@@ -258,7 +258,6 @@ class DocumentTemplateFileView(MethodPermissionAPIView):
         return Response(
             {
                 "id": locked.id,
-                "file": locked.file.url if locked.file else None,
                 "file_name": locked.file.name if locked.file else None,
             },
             status=status.HTTP_201_CREATED,

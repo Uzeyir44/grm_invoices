@@ -107,6 +107,14 @@ default) when clients can reach Django directly. Verify the deployment with:
 python manage.py check --deploy
 ```
 
+**Deployment requirement (template files).** Django deliberately does **not**
+serve `MEDIA_ROOT` (no `static(settings.MEDIA_URL, ...)` route). Template
+files are private and must only ever be delivered through the authenticated,
+tenant-scoped download endpoint (`GET /api/document-templates/<id>/file/`).
+Do **not** configure the production web server to serve `MEDIA_ROOT`/`/media/`
+publicly; keep it private. The API never advertises a public `MEDIA_URL`
+path.
+
 ## Requirements
 
 - Python 3.13+

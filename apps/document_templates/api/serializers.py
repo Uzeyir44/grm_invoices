@@ -2,6 +2,7 @@ from io import BytesIO
 from zipfile import BadZipFile, ZipFile
 
 from django.conf import settings
+from django.urls import reverse
 
 from rest_framework import serializers
 
@@ -21,16 +22,19 @@ class DocumentTemplateSerializer(serializers.ModelSerializer):
     from the payload. ``company_id`` is exposed read-only so clients can see
     which company a row belongs to (same pattern as the Client serializer).
 
-    ``file`` is exposed read-only (a stored-file URL); uploading/replacing
-    the file goes through the dedicated file endpoint. Version management
-    (TemplateVersion) is deliberately not exposed here — it belongs to a
-    later step of the feature.
+    ``file`` reports the **authenticated** download endpoint (the dedicated
+    file endpoint, never a raw storage URL), so a template's private file can
+    never be fetched by guessing a public ``/media/...`` path. Uploading /
+    replacing the file also goes through the dedicated file endpoint. Version
+    management (TemplateVersion) is deliberately not exposed here — it belongs
+    to a later step of the feature.
     """
 
     company_id = serializers.IntegerField(read_only=True)
     document_type_code = serializers.CharField(
         source="document_type.code", read_only=True
     )
+    file = serializers.SerializerMethodField()
     file_name = serializers.SerializerMethodField()
 
     class Meta:
@@ -48,6 +52,14 @@ class DocumentTemplateSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+    def get_file(self, obj):
+        if not obj.file:
+            return None
+        # The authenticated, tenant-scoped download endpoint — not a public
+        # storage URL. Serving media directly is a deployment concern that must
+        # remain disabled; the API layer never advertises a /media/ path.
+        return reverse("document-template-file", kwargs={"pk": obj.pk})
 
     def get_file_name(self, obj):
         return obj.file.name if obj.file else None
@@ -94,13 +106,15 @@ class TemplateVersionSerializer(serializers.ModelSerializer):
     """
     Read-only representation of an immutable TemplateVersion snapshot.
 
-    ``storage_path`` is deliberately not exposed (filesystem paths must not
-    leak to clients); the file is available as a URL instead. ``company``
-    descends from the template and is never client-settable.
+    ``storage_path`` and the raw file URL are deliberately not exposed: file
+    availability is reported as a boolean (``has_file``) plus the storage
+    ``file_name`` metadata, never as a publicly usable ``/media/...`` URL.
+    ``company`` descends from the template and is never client-settable.
     """
 
     company_id = serializers.IntegerField(read_only=True)
     file_name = serializers.SerializerMethodField()
+    has_file = serializers.SerializerMethodField()
 
     class Meta:
         model = TemplateVersion
@@ -110,8 +124,8 @@ class TemplateVersionSerializer(serializers.ModelSerializer):
             "company_id",
             "version_number",
             "is_active",
-            "file",
             "file_name",
+            "has_file",
             "checksum",
             "created_by_id",
             "created_at",
@@ -120,3 +134,6 @@ class TemplateVersionSerializer(serializers.ModelSerializer):
 
     def get_file_name(self, obj):
         return obj.file.name if obj.file else None
+
+    def get_has_file(self, obj):
+        return bool(obj.file)
