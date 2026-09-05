@@ -1,14 +1,39 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createGeneratedDocument,
+  downloadGeneratedDocumentDocx,
   fetchGeneratedDocuments,
+  generateDocumentDocx,
   getGeneratedDocument,
+  listGeneratedDocumentVersions,
   listGeneratedDocuments,
 } from './documents'
 import { generatedDocuments, jsonResponse } from '../test/documentFixtures'
 import { ApiError, HTTP_STATUS } from '../types/api'
 import { setAccessToken } from '../utils/authStorage'
-import type { CreateGeneratedDocumentInput } from '../types/generatedDocument'
+import type { CreateGeneratedDocumentInput, GeneratedDocumentVersion } from '../types/generatedDocument'
+
+export const generatedVersion: GeneratedDocumentVersion = {
+  id: 21,
+  generated_document_id: 9,
+  company_id: 10,
+  version_number: 1,
+  template_version_id: 3,
+  currency_id: 1,
+  exchange_rate_used: null,
+  vat_rate_used_percent: '18.00',
+  generation_metadata: { engine_version: '4.4' },
+  storage: { docx: true, pdf: false },
+  generated_by_id: 1,
+  created_at: '2026-09-05T10:00:00+00:00',
+}
+
+function docxDownloadResponse(filename = 'INV-001-v1.docx'): Response {
+  return new Response(new Blob(['fake-docx'], { type: 'application/octet-stream' }), {
+    status: 200,
+    headers: { 'Content-Disposition': `attachment; filename="${filename}"` },
+  })
+}
 
 describe('documents API', () => {
   const fetchMock = vi.fn()
@@ -148,5 +173,59 @@ describe('documents API', () => {
       status: HTTP_STATUS.NOT_FOUND,
     })
     await expect(getGeneratedDocument(999)).rejects.toBeInstanceOf(ApiError)
+  })
+
+  it('generates a document DOCX via POST with no body and returns the version', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(201, generatedVersion))
+
+    const result = await generateDocumentDocx(9)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/generated-documents/9/generate/')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({})
+    expect(result).toEqual(generatedVersion)
+  })
+
+  it('lists a document versions from the version list endpoint', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, [generatedVersion]))
+
+    const result = await listGeneratedDocumentVersions(9)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/generated-documents/9/versions/')
+    expect(init.method).toBe('GET')
+    expect(result).toEqual([generatedVersion])
+  })
+
+  it('downloads the DOCX from the version endpoint with the response filename', async () => {
+    fetchMock.mockResolvedValue(docxDownloadResponse('INV-001-v1.docx'))
+    setAccessToken('token-1')
+
+    const result = await downloadGeneratedDocumentDocx(21)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/generated-documents/versions/21/docx/')
+    expect(init.method).toBe('GET')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-1')
+    expect(result.filename).toBe('INV-001-v1.docx')
+    expect(result.blob).toBeInstanceOf(Blob)
+    expect(result.blob.size).toBeGreaterThan(0)
+  })
+
+  it('falls back to the supplied filename when Content-Disposition is absent', async () => {
+    fetchMock.mockResolvedValue(new Response(new Blob(['x']), { status: 200 }))
+
+    const result = await downloadGeneratedDocumentDocx(21, 'GEN-001.docx')
+
+    expect(result.filename).toBe('GEN-001.docx')
+  })
+
+  it('converts a 404 DOCX download into a typed ApiError', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(404, { detail: 'The requested file does not exist.' }))
+
+    await expect(downloadGeneratedDocumentDocx(999)).rejects.toMatchObject({
+      status: HTTP_STATUS.NOT_FOUND,
+    })
   })
 })

@@ -71,7 +71,9 @@ describe('App', () => {
         return Promise.resolve(jsonResponse(200, []))
       }
       if (url.includes('/generated-documents/')) {
-        // List (exact) returns an empty array; a detail path returns one row.
+        // List (exact) returns an empty array; a versions list is empty too;
+        // any other path is a single document row.
+        if (url.endsWith('/versions/')) return Promise.resolve(jsonResponse(200, []))
         return Promise.resolve(
           jsonResponse(200, url.endsWith('/generated-documents/') ? [] : DOC_DETAIL),
         )

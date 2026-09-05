@@ -2,6 +2,7 @@ import { apiClient } from './client'
 import type {
   CreateGeneratedDocumentInput,
   GeneratedDocument,
+  GeneratedDocumentVersion,
 } from '../types/generatedDocument'
 
 /**
@@ -23,10 +24,29 @@ import type {
  *     `currency_id`, `items?`. Returns `GeneratedDocument` (201). The generic
  *     client passes DRF field/nested validation errors through as a typed
  *     {@link ApiError}; a missing/cross-company client is a 404.
+ *   * `POST /generated-documents/:id/generate/` → **DOCX generation** —
+ *     synchronous. No body is required (an optional `currency_id` is
+ *     accepted; omitted when unknown). Returns the created
+ *     `GeneratedDocumentVersion` (201) with `storage.docx` true. Regenerating
+ *     creates a new version.
+ *   * `GET /generated-documents/:id/versions/` → array of
+ *     `GeneratedDocumentVersion`, ordered by `version_number`.
+ *   * `GET /generated-documents/versions/:versionId/docx/` → authenticated
+ *     DOCX download (binary, `Content-Disposition` attachment, DOCX MIME).
+ *     Requires a **version** id — the detail serializer exposes no version ids.
  *
  * The company is never sent from the client — the backend derives it from the
  * authenticated user's tenant (a body `company_id` is ignored).
  */
+
+const DEFAULT_DOCX_FILENAME = 'document.docx'
+
+function filenameFromContentDisposition(response: Response): string | null {
+  const value = response.headers.get('Content-Disposition')
+  if (!value) return null
+  const match = /filename="?([^";]+)"?/.exec(value)
+  return match ? match[1] : null
+}
 
 export function listGeneratedDocuments(): Promise<GeneratedDocument[]> {
   return apiClient.get<GeneratedDocument[]>('/generated-documents/')
@@ -40,6 +60,39 @@ export function fetchGeneratedDocuments(): Promise<GeneratedDocument[]> {
 /** Fetch one document by its backend identifier (`GET /generated-documents/:id/`). */
 export function getGeneratedDocument(id: number): Promise<GeneratedDocument> {
   return apiClient.get<GeneratedDocument>(`/generated-documents/${id}/`)
+}
+
+/** Generate (and persist) a DOCX synchronously (`POST /generated-documents/:id/generate/`). */
+export function generateDocumentDocx(id: number): Promise<GeneratedDocumentVersion> {
+  return apiClient.post<GeneratedDocumentVersion>(`/generated-documents/${id}/generate/`, {})
+}
+
+/** List a document's generated versions (`GET /generated-documents/:id/versions/`). */
+export function listGeneratedDocumentVersions(id: number): Promise<GeneratedDocumentVersion[]> {
+  return apiClient.get<GeneratedDocumentVersion[]>(`/generated-documents/${id}/versions/`)
+}
+
+export interface DocumentDownload {
+  blob: Blob
+  filename: string
+}
+
+/**
+ * Download a document version's DOCX through the authenticated endpoint
+ * (`GET /generated-documents/versions/:versionId/docx/`). The filename is taken
+ * from the response's `Content-Disposition` when present, falling back to
+ * `fallbackFilename`. Never a `/media/...` URL, never a token in a URL.
+ */
+export async function downloadGeneratedDocumentDocx(
+  versionId: number,
+  fallbackFilename: string = DEFAULT_DOCX_FILENAME,
+): Promise<DocumentDownload> {
+  const response = await apiClient.raw(`/generated-documents/versions/${versionId}/docx/`)
+  const blob = await response.blob()
+  return {
+    blob,
+    filename: filenameFromContentDisposition(response) ?? fallbackFilename,
+  }
 }
 
 export function createGeneratedDocument(
