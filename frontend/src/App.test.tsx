@@ -62,6 +62,9 @@ describe('App', () => {
       if (url.includes('/reference-data/document-types/')) {
         return Promise.resolve(jsonResponse(200, []))
       }
+      if (url.includes('/reference-data/currencies/')) {
+        return Promise.resolve(jsonResponse(200, []))
+      }
       return Promise.resolve(jsonResponse(200, {}))
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -155,6 +158,26 @@ describe('App', () => {
     const { unmount } = renderAt('/documents')
     expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument()
     unmount()
+  })
+
+  it('redirects unauthenticated users away from the document create route', async () => {
+    const { unmount } = renderAt('/documents/new')
+    expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument()
+    unmount()
+  })
+
+  it('renders the document create form inside the protected shell for authenticated users', async () => {
+    setAccessToken('token-1')
+    stubBackend()
+
+    renderAt('/documents/new')
+
+    expect(
+      await screen.findByRole('navigation', { name: /main navigation/i }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /new document/i })).toBeInTheDocument()
+    // All dependency catalogs are empty in the stub, so the form still renders.
+    expect(await screen.findByLabelText(/client/i)).toBeInTheDocument()
   })
 
   it('renders the documents list inside the protected shell for authenticated users', async () => {

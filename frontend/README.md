@@ -3,6 +3,9 @@
 Frontend application for the GRM CRM Django backend.
 
 Implemented so far:
+- **Generated document creation** (Phase 6.2): `/documents/new` creates a real
+  generated document (client + document type + currency + optional line items)
+  through the backend creation endpoint.
 - **Generated documents list** (Phase 6.1): `/documents` shows the real
   generated documents for the authenticated company (no search/filter/
   pagination — the backend supports none).
@@ -17,9 +20,8 @@ Implemented so far:
   initialization, protected routes, automatic access-token refresh, logout.
 - **Technical foundation** (Phase 1): routing, Tailwind, the generic API
   client, the typed error model.
-- Document *generation* (creating filled documents from templates), document
-  creation/detail/editing, and DOCX/PDF download UI are not implemented yet —
-  those are later Generated Documents tasks.
+- Document detail, editing, DOCX/PDF generation/download, and document
+  regeneration are not implemented yet — later Generated Documents tasks.
 
 ## Stack
 
@@ -195,6 +197,7 @@ sends `company_id`).
 | Backend endpoint | Operation | API module fn |
 |---|---|---|
 | `GET /api/generated-documents/` | list (plain array, **no pagination**) | `listGeneratedDocuments()` / `fetchGeneratedDocuments()` (dashboard alias) |
+| `POST /api/generated-documents/` | **create** a document (201) | `createGeneratedDocument(input)` |
 
 - The list shows the fields the backend actually returns: `document_number`,
   `document_type_code`, `client_id` (displayed as `Client #<id>` because the
@@ -204,13 +207,39 @@ sends `company_id`).
   parameter, or pagination — the list endpoint always returns the caller's
   documents ordered newest-first. The page therefore renders that collection
   directly with no invented controls and no pagination UI.
-- Document creation, detail, editing, generation, and DOCX/PDF download are
-  **not** implemented (later Generated Documents phases); rows are plain text,
-  so no navigation to a nonexistent `/documents/:id` route is shown.
 - States: loading (no fake rows/counts), empty ("No documents yet."), and a
   safe error state with a retry action. Errors use the typed `ApiError`
   (403 → safe access-denied message, 429 → retry message, 5xx → generic
   message); 401 is handled by the existing refresh flow.
+
+### Creating a document (`/documents/new`)
+
+`DocumentCreatePage` (`src/pages/documents/`) creates a document through the
+real `POST /api/generated-documents/` endpoint using the fields the backend
+`GeneratedDocumentCreateSerializer` accepts:
+
+- **Client** (required) — from `listClients()` (`GET /api/clients/`).
+- **Document type** (required) — from `fetchDocumentTypes()`
+  (`GET /api/reference-data/document-types/`). When the company's templates are
+  known (`GET /api/document-templates/`), types without an active template are
+  hidden from the dropdown; the backend stays authoritative and rejects
+  unresolvable types/templates with a clear `detail` message.
+- **Currency** (required in practice) — from `fetchCurrencies()`
+  (`GET /api/reference-data/currencies/`). The backend service rejects
+  creation without a currency for the initial version.
+- **Line items** (optional) — dynamic rows with `description`, `quantity`,
+  `unit`, `unit_price`, `discount_percent`, and `vat_rate_percent`. Users can
+  add, edit, and remove rows. Totals (`subtotal`/`vat_amount`/`total`) and the
+  document number are computed **server-side** and never submitted.
+
+Dependencies load independently with their own retry; a failed catalog is shown
+as an error, never as a silently empty list. Submission disables the button,
+prevents duplicate POSTs, and navigates back to `/documents` on success (a
+document-detail route does not exist yet, so there is no detail navigation).
+Backend field errors render next to the matching control, nested line-item
+errors render on the offending row, and `detail` messages (e.g. missing active
+template) render as a form-level message. `company_id` is never sent; the
+backend derives the tenant from the authenticated user.
 
 ## API client
 
@@ -262,6 +291,7 @@ trigger the refresh flow.
 /templates/new → create template (protected, inside AppShell)
 /templates/:templateId → template detail (protected, inside AppShell)
 /documents     → generated document list (protected, inside AppShell)
+/documents/new → create generated document (protected, inside AppShell)
 *              → not found
 ```
 
@@ -289,11 +319,16 @@ detail page (metadata, active version, version history, empty versions, 404 /
 403 / 5xx, upload incl. `.docx` validation and backend errors, authenticated
 download with filename handling, create/activate version incl. in-flight
 activation state and activation error, delete confirmation), and the generated
-documents slice: the documents API module (endpoint, no query params, typed
-errors) and the documents list page (loading, data rendering, count, empty
-state, error/retry, and no invented search/filter/pagination controls), plus
-protected routing for `/templates`, `/templates/new`, `/templates/:templateId`,
-and `/documents`.
+documents slice: the documents API module (endpoint, no query params, create
+payload incl. no `company_id`, typed errors), the reference-data currency API,
+the documents list page (loading, data rendering, count, empty state,
+error/retry, no invented search/filter/pagination controls), and the create
+page (loading, per-dependency errors + retry, client / document-type /
+currency options, only document types with an active template, line-item
+add/edit/remove and submission, form validation, successful creation +
+redirect, duplicate-submit prevention, backend field / nested line-item /
+non-field errors, cancellation), plus protected routing for `/templates`,
+`/templates/new`, `/templates/:templateId`, `/documents`, and `/documents/new`.
 
 ## Known limitations
 
@@ -317,10 +352,15 @@ and `/documents`.
   first, with no query parameters), so none are shown.
 - The documents list serializer exposes only `client_id` for the client (no
   client name), so rows show `Client #<id>`.
-- Document creation, detail, editing, **generation**, and DOCX/PDF download UI
-  are not implemented — these are later Generated Documents phases. `POST`,
-  detail, versions, generate, and download endpoints exist on the backend but
-  have no frontend yet.
+- Document creation requires the company to have an **active document template
+  with an active version** for the chosen document type and a currency for the
+  initial version — otherwise the backend rejects creation with a clear
+  `detail` message (surfaced by the create form).
+- Document detail, editing, **generation** (DOCX/PDF), regeneration, and
+  DOCX/PDF download UI are not implemented — these are later Generated
+  Documents phases. Detail/generate/versions/download endpoints exist on the
+  backend but have no frontend yet. After creation the app returns to
+  `/documents` because no detail route exists.
 - Nested client editing (addresses / contacts / bank accounts) is a separate
   later phase; this phase only displays the read-only data already returned by
   the client detail endpoint.

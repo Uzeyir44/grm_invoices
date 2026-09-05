@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { DocumentType } from '../types/referenceData'
+import type { Currency, DocumentType } from '../types/referenceData'
 
 /**
  * Read-only reference-data catalog API slice, built on the generic
@@ -7,9 +7,14 @@ import type { DocumentType } from '../types/referenceData'
  *
  * Endpoint contracts (verified against the Django backend in `apps/reference_data`):
  *   * `GET /reference-data/document-types/` → array of `DocumentType`
- *     (`{ id, code, name }`), ordered by `code`. Used by the document-template
- *     create form and list filter, where `document_type` is a foreign-key id.
+ *     (`{ id, code, name }`), ordered by `code`.
+ *   * `GET /reference-data/currencies/` → array of `Currency`
+ *     (`{ id, code, name, minor_unit }`), ordered by `code`.
  */
 export function fetchDocumentTypes(): Promise<DocumentType[]> {
   return apiClient.get<DocumentType[]>('/reference-data/document-types/')
+}
+
+export function fetchCurrencies(): Promise<Currency[]> {
+  return apiClient.get<Currency[]>('/reference-data/currencies/')
 }
