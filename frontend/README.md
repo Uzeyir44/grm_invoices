@@ -3,6 +3,9 @@
 Frontend application for the GRM CRM Django backend.
 
 Implemented so far:
+- **Generated documents list** (Phase 6.1): `/documents` shows the real
+  generated documents for the authenticated company (no search/filter/
+  pagination — the backend supports none).
 - **Document templates vertical slice** (Phase 5): template list with a
   document-type filter, create, detail (metadata, current file, upload/replace,
   download, version history, create/activate version), and soft-delete.
@@ -14,8 +17,9 @@ Implemented so far:
   initialization, protected routes, automatic access-token refresh, logout.
 - **Technical foundation** (Phase 1): routing, Tailwind, the generic API
   client, the typed error model.
-- Document *generation* (creating filled documents from templates) and PDF UI
-  are not implemented yet — the `/documents` route is still a placeholder.
+- Document *generation* (creating filled documents from templates), document
+  creation/detail/editing, and DOCX/PDF download UI are not implemented yet —
+  those are later Generated Documents tasks.
 
 ## Stack
 
@@ -181,6 +185,33 @@ the authenticated user's company (the frontend never sends `company_id`).
   safe access-denied state, 404 a safe not-found state, 429 a friendly retry
   message, and 5xx a generic message — never raw backend internals.
 
+## Generated documents
+
+`/documents` (`src/pages/documents/`) lists the generated documents for the
+authenticated company, backed by the existing Django `generated_documents` API
+— the company is always the authenticated user's company (the frontend never
+sends `company_id`).
+
+| Backend endpoint | Operation | API module fn |
+|---|---|---|
+| `GET /api/generated-documents/` | list (plain array, **no pagination**) | `listGeneratedDocuments()` / `fetchGeneratedDocuments()` (dashboard alias) |
+
+- The list shows the fields the backend actually returns: `document_number`,
+  `document_type_code`, `client_id` (displayed as `Client #<id>` because the
+  list serializer exposes only the id, never a client name), `status`, and
+  `created_at`.
+- The backend provides **no** search, status/type/client/date filters, ordering
+  parameter, or pagination — the list endpoint always returns the caller's
+  documents ordered newest-first. The page therefore renders that collection
+  directly with no invented controls and no pagination UI.
+- Document creation, detail, editing, generation, and DOCX/PDF download are
+  **not** implemented (later Generated Documents phases); rows are plain text,
+  so no navigation to a nonexistent `/documents/:id` route is shown.
+- States: loading (no fake rows/counts), empty ("No documents yet."), and a
+  safe error state with a retry action. Errors use the typed `ApiError`
+  (403 → safe access-denied message, 429 → retry message, 5xx → generic
+  message); 401 is handled by the existing refresh flow.
+
 ## API client
 
 `src/api/client.ts` is the single HTTP entry point: GET/POST/PUT/PATCH/DELETE,
@@ -230,7 +261,7 @@ trigger the refresh flow.
 /templates     → template list (protected, inside AppShell)
 /templates/new → create template (protected, inside AppShell)
 /templates/:templateId → template detail (protected, inside AppShell)
-/documents     → protected placeholder (inside AppShell)
+/documents     → generated document list (protected, inside AppShell)
 *              → not found
 ```
 
@@ -249,7 +280,7 @@ state, login page, protected routing, the application shell, the dashboard
 (loading / data / empty / error / partial-failure), the dashboard API modules,
 the clients API module, the client list / create / detail / edit pages
 (loading, success, empty, error/retry, validation, delete confirmation,
-navigation, and URL search/filter behavior), and the document-templates slice:
+navigation, and URL search/filter behavior), the document-templates slice:
 the templates + reference-data API modules (methods, bodies, FormData upload,
 query params, binary download), the template list (loading / data / empty /
 error/retry / document-type filter / navigation), the create form (fields,
@@ -257,8 +288,12 @@ validation, success, backend errors, duplicate-submission guard, redirect), the
 detail page (metadata, active version, version history, empty versions, 404 /
 403 / 5xx, upload incl. `.docx` validation and backend errors, authenticated
 download with filename handling, create/activate version incl. in-flight
-activation state and activation error, delete confirmation), and protected
-routing for `/templates`, `/templates/new`, and `/templates/:templateId`.
+activation state and activation error, delete confirmation), and the generated
+documents slice: the documents API module (endpoint, no query params, typed
+errors) and the documents list page (loading, data rendering, count, empty
+state, error/retry, and no invented search/filter/pagination controls), plus
+protected routing for `/templates`, `/templates/new`, `/templates/:templateId`,
+and `/documents`.
 
 ## Known limitations
 
@@ -277,6 +312,15 @@ routing for `/templates`, `/templates/new`, and `/templates/:templateId`.
   `document_templates.*` / `document_templates.version_*` permissions.)
 - The template and client lists are not paginated (the backend returns plain
   arrays).
+- The generated documents list is **not** paginated and supports **no**
+  search/filter/ordering parameters (the backend returns a plain array, newest
+  first, with no query parameters), so none are shown.
+- The documents list serializer exposes only `client_id` for the client (no
+  client name), so rows show `Client #<id>`.
+- Document creation, detail, editing, **generation**, and DOCX/PDF download UI
+  are not implemented — these are later Generated Documents phases. `POST`,
+  detail, versions, generate, and download endpoints exist on the backend but
+  have no frontend yet.
 - Nested client editing (addresses / contacts / bank accounts) is a separate
   later phase; this phase only displays the read-only data already returned by
   the client detail endpoint.
@@ -286,6 +330,4 @@ routing for `/templates`, `/templates/new`, and `/templates/:templateId`.
 - Version *creation* requires the template to already have a current file (the
   backend rejects it otherwise), and validates placeholders in the document's
   text — invalid/unknown placeholders are reported as a version-creation error.
-- Document **generation** (filling templates to produce numbered documents) and
-  the PDF UI are not implemented — `/documents` is still a placeholder.
 - There is no registration, password reset, or account management UI.

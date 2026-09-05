@@ -151,6 +151,26 @@ describe('App', () => {
     }
   })
 
+  it('redirects unauthenticated users away from the documents route', async () => {
+    const { unmount } = renderAt('/documents')
+    expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument()
+    unmount()
+  })
+
+  it('renders the documents list inside the protected shell for authenticated users', async () => {
+    setAccessToken('token-1')
+    stubBackend()
+
+    renderAt('/documents')
+
+    expect(
+      await screen.findByRole('navigation', { name: /main navigation/i }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /documents/i })).toBeInTheDocument()
+    // The empty backend documents list produces the empty state (no fabricated rows).
+    expect(await screen.findByText('No documents yet.')).toBeInTheDocument()
+  })
+
   it('renders the template list inside the protected shell for authenticated users', async () => {
     setAccessToken('token-1')
     stubBackend()
