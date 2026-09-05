@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DocumentCreatePage } from './DocumentCreatePage'
 import { clientSummaries, jsonResponse } from '../../test/clientFixtures'
@@ -19,11 +19,17 @@ const templates: DocumentTemplate[] = [templateSummaries[0]]
 
 const createdDocument = generatedDocuments[0]
 
+function DetailMarker() {
+  const { documentId } = useParams()
+  return <div data-testid="detail-view">{documentId}</div>
+}
+
 function renderCreate() {
   return render(
     <MemoryRouter initialEntries={['/documents/new']}>
       <Routes>
         <Route path="/documents/new" element={<DocumentCreatePage />} />
+        <Route path="/documents/:documentId" element={<DetailMarker />} />
         <Route path="/documents" element={<div data-testid="documents-list" />} />
       </Routes>
     </MemoryRouter>,
@@ -153,7 +159,7 @@ describe('DocumentCreatePage', () => {
     expect(postCalls()).toHaveLength(0)
   })
 
-  it('creates a document and navigates back to the documents list', async () => {
+  it('creates a document and navigates to its detail page using the real id', async () => {
     stubBackend()
     renderCreate()
     await screen.findByLabelText(/client/i)
@@ -167,7 +173,10 @@ describe('DocumentCreatePage', () => {
 
     await user.click(screen.getByRole('button', { name: /create document/i }))
 
-    expect(await screen.findByTestId('documents-list')).toBeInTheDocument()
+    // POST /api/generated-documents/ returns the created document (id 9);
+    // the form must navigate to that real id, not fabricate one.
+    const detail = await screen.findByTestId('detail-view')
+    expect(detail).toHaveTextContent('9')
     const [url, init] = postCalls()[0] as [string, RequestInit]
     expect(url).toBe('/api/generated-documents/')
     expect(JSON.parse(String(init.body))).toEqual({
@@ -209,7 +218,8 @@ describe('DocumentCreatePage', () => {
     await user.click(screen.getAllByRole('button', { name: /remove/i })[1])
 
     await user.click(screen.getByRole('button', { name: /create document/i }))
-    await screen.findByTestId('documents-list')
+    const detail = await screen.findByTestId('detail-view')
+    expect(detail).toHaveTextContent('9')
 
     const [, init] = postCalls()[0] as [string, RequestInit]
     const body = JSON.parse(String(init.body)) as {
@@ -240,7 +250,8 @@ describe('DocumentCreatePage', () => {
     expect(postCalls()).toHaveLength(1)
 
     resolvePost(jsonResponse(201, createdDocument))
-    await screen.findByTestId('documents-list')
+    const detail = await screen.findByTestId('detail-view')
+    expect(detail).toHaveTextContent('9')
   })
 
   it('shows backend field validation errors next to the relevant field', async () => {

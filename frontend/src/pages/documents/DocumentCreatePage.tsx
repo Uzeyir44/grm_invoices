@@ -151,8 +151,8 @@ function formMessageFor(error: ApiError, fieldErrors: Errors): string | undefine
  * `GeneratedDocumentCreateSerializer` (client, document type, currency, and
  * optional line items); totals and numbering are computed server-side and are
  * never submitted. `company_id` is never sent — the backend owns the tenant.
- * There is no document-detail route yet, so a successful creation returns to
- * the documents list.
+ * On success the backend's real created-document id is used to open its detail
+ * page.
  */
 export function DocumentCreatePage() {
   const navigate = useNavigate()
@@ -259,8 +259,8 @@ export function DocumentCreatePage() {
 
     setSubmitting(true)
     try {
-      await createGeneratedDocument(buildPayload())
-      navigate('/documents')
+      const created = await createGeneratedDocument(buildPayload())
+      navigate(`/documents/${created.id}`)
     } catch (error) {
       if (error instanceof ApiError) {
         const fieldErrors = topLevelFieldErrors(error)

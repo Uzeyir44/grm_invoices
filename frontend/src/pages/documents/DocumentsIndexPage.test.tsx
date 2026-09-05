@@ -10,6 +10,7 @@ function renderDocuments() {
     <MemoryRouter initialEntries={['/documents']}>
       <Routes>
         <Route path="/documents" element={<DocumentsIndexPage />} />
+        <Route path="/documents/new" element={<div>create-page</div>} />
         <Route path="/documents/:documentId" element={<div>detail-page</div>} />
       </Routes>
     </MemoryRouter>,
@@ -84,6 +85,23 @@ describe('DocumentsIndexPage', () => {
 
     expect(await screen.findByText('No documents yet.')).toBeInTheDocument()
     expect(screen.getByTestId('documents-count')).toHaveTextContent('0 documents')
+    // The empty state offers the real create route.
+    expect(screen.getByRole('link', { name: /create your first document/i })).toHaveAttribute(
+      'href',
+      '/documents/new',
+    )
+  })
+
+  it('navigates to the create page from the New document action', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, generatedDocuments))
+    renderDocuments()
+    await screen.findByRole('link', { name: 'INV-001' })
+
+    const createLink = screen.getByRole('link', { name: /new document/i })
+    expect(createLink).toHaveAttribute('href', '/documents/new')
+
+    await user.click(createLink)
+    expect(await screen.findByText('create-page')).toBeInTheDocument()
   })
 
   it('shows an error state and retries the request', async () => {

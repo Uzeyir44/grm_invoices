@@ -227,7 +227,8 @@ sends `company_id`).
   safe error state with a retry action. Errors use the typed `ApiError`
   (403 → safe access-denied message, 429 → retry message, 5xx → generic
   message); 401 is handled by the existing refresh flow.
-- Each row's document number links to `/documents/:documentId`.
+- Each row's document number links to `/documents/:documentId`, and a
+  "New document" action (also in the empty state) links to `/documents/new`.
 
 ### Document detail (`/documents/:documentId`)
 
@@ -307,7 +308,8 @@ real `POST /api/generated-documents/` endpoint using the fields the backend
 
 Dependencies load independently with their own retry; a failed catalog is shown
 as an error, never as a silently empty list. Submission disables the button,
-prevents duplicate POSTs, and navigates back to `/documents` on success.
+prevents duplicate POSTs, and on success navigates to the created document's
+detail page using the document id returned by the backend.
 Backend field errors render next to the matching control, nested line-item
 errors render on the offending row, and `detail` messages (e.g. missing active
 template) render as a form-level message. `company_id` is never sent; the
@@ -399,8 +401,10 @@ state, error/retry, no invented search/filter/pagination controls, detail
 links), the create page (loading, per-dependency errors + retry, client /
 document-type / currency options, only document types with an active template,
 line-item add/edit/remove and submission, form validation, successful creation
-+ redirect, duplicate-submit prevention, backend field / nested line-item /
-non-field errors, cancellation), the detail page (loading, metadata
++ redirect to the created detail page, list → create / create → detail /
+list → detail / detail → list navigation, duplicate-submit prevention, backend
+field / nested line-item / non-field errors, cancellation), the detail page
+(loading, metadata
 rendering incl. status badge and client/template links, non-numeric id, 404 /
 403 / generic error / retry, back navigation), DOCX generation + download
 (API: generate method/body/response, version list, DOCX download blob +

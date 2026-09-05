@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import { listGeneratedDocuments } from '../../api/documents'
+import { buttonClasses } from '../../components/ui/buttonClasses'
 import { DocumentStatusBadge } from '../../components/ui/DocumentStatusBadge'
 import { PageContainer } from '../../components/ui/PageContainer'
 import type { GeneratedDocument } from '../../types/generatedDocument'
@@ -46,11 +47,18 @@ export function DocumentsIndexPage() {
   return (
     <PageContainer title="Documents">
       <div className="space-y-4">
-        {documents !== null && !error ? (
-          <p className="text-sm text-slate-500" data-testid="documents-count">
-            {documents.length} {documents.length === 1 ? 'document' : 'documents'}
-          </p>
-        ) : null}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            {documents !== null && !error ? (
+              <p className="text-sm text-slate-500" data-testid="documents-count">
+                {documents.length} {documents.length === 1 ? 'document' : 'documents'}
+              </p>
+            ) : null}
+          </div>
+          <Link to="/documents/new" className={buttonClasses('primary')}>
+            New document
+          </Link>
+        </div>
 
         {error && (
           <div
@@ -77,6 +85,12 @@ export function DocumentsIndexPage() {
         {documents !== null && documents.length === 0 && !error && (
           <div className="rounded-lg border border-dashed border-slate-300 px-4 py-10 text-center">
             <p className="text-sm text-slate-500">No documents yet.</p>
+            <Link
+              to="/documents/new"
+              className="mt-2 inline-block text-sm font-medium text-slate-700 underline"
+            >
+              Create your first document
+            </Link>
           </div>
         )}
 
