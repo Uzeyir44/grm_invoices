@@ -3,7 +3,9 @@ import { Link, useParams } from 'react-router-dom'
 
 import {
   downloadGeneratedDocumentDocx,
+  downloadGeneratedDocumentPdf,
   generateDocumentDocx,
+  generateGeneratedDocumentPdf,
   getGeneratedDocument,
   listGeneratedDocumentVersions,
 } from '../../api/documents'
@@ -26,7 +28,7 @@ function formatDate(iso: string): string {
   return date.toISOString().slice(0, 10)
 }
 
-function docxError(error: unknown, fallback: string): string {
+function fileActionError(error: unknown, fallback: string): string {
   if (!(error instanceof ApiError)) return fallback
   if (error.status === HTTP_STATUS.FORBIDDEN) {
     return 'You do not have permission to generate or download this document.'
@@ -42,6 +44,18 @@ function docxError(error: unknown, fallback: string): string {
   return error.message || fallback
 }
 
+/** Trigger the browser's download for a binary `Blob` and clean up its URL. */
+function triggerBrowserDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  URL.revokeObjectURL(url)
+}
+
 /**
  * Generated document detail (`GET /api/generated-documents/:id/`). The backend
  * returns the same `GeneratedDocumentSerializer` for detail and list, so this
@@ -50,10 +64,12 @@ function docxError(error: unknown, fallback: string): string {
  * documents alike, so both render the same safe "not found" state. No
  * `company_id` is ever sent.
  *
- * DOCX generation (this phase) is synchronous: the generated file lives on a
- * document *version*, so the page also fetches the version list, offers a
- * "Generate DOCX" action when no version has a DOCX, and an authenticated
- * "Download DOCX" action (via the version-based endpoint) when one exists.
+ * DOCX and PDF generation (this phase) are synchronous and both live on a
+ * document *version*: the page fetches the version list, offers "Generate
+ * DOCX" when no version has a DOCX, "Download DOCX" when one exists, and —
+ * once a DOCX version exists — the matching "Generate PDF"/"Download PDF"
+ * actions driven by the version's `storage.pdf` state. The two workflows keep
+ * independent loading states.
  */
 export function DocumentDetailPage() {
   const { documentId } = useParams()
@@ -65,10 +81,14 @@ export function DocumentDetailPage() {
   const [versionsError, setVersionsError] = useState(false)
   const [versionsReloadKey, setVersionsReloadKey] = useState(0)
 
-  const [generating, setGenerating] = useState(false)
-  const [generationError, setGenerationError] = useState<string>()
+  const [docxGenerating, setDocxGenerating] = useState(false)
+  const [docxGenerationError, setDocxGenerationError] = useState<string>()
 
-  const [downloading, setDownloading] = useState(false)
+  const [pdfGenerating, setPdfGenerating] = useState(false)
+  const [pdfGenerationError, setPdfGenerationError] = useState<string>()
+
+  const [docxDownloading, setDocxDownloading] = useState(false)
+  const [pdfDownloading, setPdfDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState<string>()
 
   const [fileNotice, setFileNotice] = useState<string>()
@@ -121,10 +141,10 @@ export function DocumentDetailPage() {
     return [...versions].reverse().find((version) => version.storage.docx) ?? null
   }, [versions])
 
-  function handleGenerate() {
-    if (generating) return
-    setGenerating(true)
-    setGenerationError(undefined)
+  function handleGenerateDocx() {
+    if (docxGenerating) return
+    setDocxGenerating(true)
+    setDocxGenerationError(undefined)
     setFileNotice(undefined)
     void generateDocumentDocx(id)
       .then((version) => {
@@ -132,32 +152,51 @@ export function DocumentDetailPage() {
         reloadVersions()
       })
       .catch((error: unknown) =>
-        setGenerationError(docxError(error, 'Could not generate the DOCX.')),
+        setDocxGenerationError(fileActionError(error, 'Could not generate the DOCX.')),
       )
-      .finally(() => setGenerating(false))
+      .finally(() => setDocxGenerating(false))
   }
 
-  function handleDownload(version: GeneratedDocumentVersion) {
-    if (downloading) return
-    setDownloading(true)
-    setDownloadError(undefined)
+  function handleGeneratePdf(version: GeneratedDocumentVersion) {
+    if (pdfGenerating) return
+    setPdfGenerating(true)
+    setPdfGenerationError(undefined)
     setFileNotice(undefined)
-    const fallbackFilename = state.status === 'ready' ? `${state.data.document_number || `document-${state.data.id}`}.docx` : 'document.docx'
-    void downloadGeneratedDocumentDocx(version.id, fallbackFilename)
-      .then(({ blob, filename }) => {
-        const url = URL.createObjectURL(blob)
-        const anchor = document.createElement('a')
-        anchor.href = url
-        anchor.download = filename
-        document.body.appendChild(anchor)
-        anchor.click()
-        document.body.removeChild(anchor)
-        URL.revokeObjectURL(url)
+    void generateGeneratedDocumentPdf(version.id)
+      .then((result) => {
+        setFileNotice(`PDF generated for version ${result.version_number}.`)
+        reloadVersions()
       })
       .catch((error: unknown) =>
-        setDownloadError(docxError(error, 'Could not download the DOCX.')),
+        setPdfGenerationError(fileActionError(error, 'Could not generate the PDF.')),
       )
-      .finally(() => setDownloading(false))
+      .finally(() => setPdfGenerating(false))
+  }
+
+  function handleDownloadDocx(version: GeneratedDocumentVersion) {
+    if (docxDownloading) return
+    setDocxDownloading(true)
+    setDownloadError(undefined)
+    const fallbackFilename = state.status === 'ready' ? `${state.data.document_number || `document-${state.data.id}`}.docx` : 'document.docx'
+    void downloadGeneratedDocumentDocx(version.id, fallbackFilename)
+      .then(({ blob, filename }) => triggerBrowserDownload(blob, filename))
+      .catch((error: unknown) =>
+        setDownloadError(fileActionError(error, 'Could not download the DOCX.')),
+      )
+      .finally(() => setDocxDownloading(false))
+  }
+
+  function handleDownloadPdf(version: GeneratedDocumentVersion) {
+    if (pdfDownloading) return
+    setPdfDownloading(true)
+    setDownloadError(undefined)
+    const fallbackFilename = state.status === 'ready' ? `${state.data.document_number || `document-${state.data.id}`}.pdf` : 'document.pdf'
+    void downloadGeneratedDocumentPdf(version.id, fallbackFilename)
+      .then(({ blob, filename }) => triggerBrowserDownload(blob, filename))
+      .catch((error: unknown) =>
+        setDownloadError(fileActionError(error, 'Could not download the PDF.')),
+      )
+      .finally(() => setPdfDownloading(false))
   }
 
   if (Number.isNaN(id)) {
@@ -311,45 +350,78 @@ export function DocumentDetailPage() {
             </div>
           ) : null}
           {!versionsError && versions !== null ? (
-            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white p-4">
-              {docxVersion ? (
-                <>
+            docxVersion ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white p-4">
                   <p className="text-sm text-slate-600">
                     DOCX file available (version {docxVersion.version_number}).
                   </p>
                   <Button
                     variant="secondary"
-                    loading={downloading}
-                    loadingLabel="Downloading…"
-                    disabled={downloading}
-                    onClick={() => handleDownload(docxVersion)}
+                    loading={docxDownloading}
+                    loadingLabel="Downloading DOCX…"
+                    disabled={docxDownloading}
+                    onClick={() => handleDownloadDocx(docxVersion)}
                   >
                     Download DOCX
                   </Button>
-                </>
-              ) : (
-                <>
-                  <p className="text-sm text-slate-500">No DOCX generated yet.</p>
-                  <Button
-                    variant="secondary"
-                    loading={generating}
-                    loadingLabel="Generating DOCX…"
-                    onClick={handleGenerate}
-                  >
-                    Generate DOCX
-                  </Button>
-                </>
-              )}
-            </div>
+                </div>
+                {docxVersion.storage.pdf ? (
+                  <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white p-4">
+                    <p className="text-sm text-slate-600">
+                      PDF file available (version {docxVersion.version_number}).
+                    </p>
+                    <Button
+                      variant="secondary"
+                      loading={pdfDownloading}
+                      loadingLabel="Downloading PDF…"
+                      disabled={pdfDownloading}
+                      onClick={() => handleDownloadPdf(docxVersion)}
+                    >
+                      Download PDF
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white p-4">
+                    <p className="text-sm text-slate-500">No PDF generated yet.</p>
+                    <Button
+                      variant="secondary"
+                      loading={pdfGenerating}
+                      loadingLabel="Generating PDF…"
+                      onClick={() => handleGeneratePdf(docxVersion)}
+                    >
+                      Generate PDF
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white p-4">
+                <p className="text-sm text-slate-500">No DOCX generated yet.</p>
+                <Button
+                  variant="secondary"
+                  loading={docxGenerating}
+                  loadingLabel="Generating DOCX…"
+                  onClick={handleGenerateDocx}
+                >
+                  Generate DOCX
+                </Button>
+              </div>
+            )
           ) : null}
           {fileNotice ? (
             <p role="status" className="text-sm text-emerald-700">
               {fileNotice}
             </p>
           ) : null}
-          {generationError ? (
+          {docxGenerationError ? (
             <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
-              {generationError}
+              {docxGenerationError}
+            </p>
+          ) : null}
+          {pdfGenerationError ? (
+            <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+              {pdfGenerationError}
             </p>
           ) : null}
           {downloadError ? (

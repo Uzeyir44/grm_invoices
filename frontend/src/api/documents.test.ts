@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createGeneratedDocument,
   downloadGeneratedDocumentDocx,
+  downloadGeneratedDocumentPdf,
   fetchGeneratedDocuments,
   generateDocumentDocx,
+  generateGeneratedDocumentPdf,
   getGeneratedDocument,
   listGeneratedDocumentVersions,
   listGeneratedDocuments,
@@ -30,6 +32,13 @@ export const generatedVersion: GeneratedDocumentVersion = {
 
 function docxDownloadResponse(filename = 'INV-001-v1.docx'): Response {
   return new Response(new Blob(['fake-docx'], { type: 'application/octet-stream' }), {
+    status: 200,
+    headers: { 'Content-Disposition': `attachment; filename="${filename}"` },
+  })
+}
+
+function pdfDownloadResponse(filename = 'INV-001-v1.pdf'): Response {
+  return new Response(new Blob(['%PDF-fake'], { type: 'application/pdf' }), {
     status: 200,
     headers: { 'Content-Disposition': `attachment; filename="${filename}"` },
   })
@@ -225,6 +234,58 @@ describe('documents API', () => {
     fetchMock.mockResolvedValue(jsonResponse(404, { detail: 'The requested file does not exist.' }))
 
     await expect(downloadGeneratedDocumentDocx(999)).rejects.toMatchObject({
+      status: HTTP_STATUS.NOT_FOUND,
+    })
+  })
+
+  it('generates a version PDF via POST with no body and returns the version', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { ...generatedVersion, storage: { docx: true, pdf: true } }))
+
+    const result = await generateGeneratedDocumentPdf(21)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/generated-documents/versions/21/generate-pdf/')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({})
+    expect(result.storage.pdf).toBe(true)
+  })
+
+  it('propagates a 503 when the PDF conversion runtime is unavailable', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(503, { detail: 'PDF conversion is currently unavailable.' }))
+
+    await expect(generateGeneratedDocumentPdf(21)).rejects.toMatchObject({
+      status: 503,
+    })
+  })
+
+  it('downloads the PDF from the version endpoint with the response filename and type', async () => {
+    fetchMock.mockResolvedValue(pdfDownloadResponse('INV-001-v1.pdf'))
+    setAccessToken('token-1')
+
+    const result = await downloadGeneratedDocumentPdf(21)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/generated-documents/versions/21/pdf/')
+    expect(init.method).toBe('GET')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-1')
+    expect(new Headers(init.headers).get('Accept')).toBe('*/*')
+    expect(result.filename).toBe('INV-001-v1.pdf')
+    expect(result.blob).toBeInstanceOf(Blob)
+    expect(result.blob.size).toBeGreaterThan(0)
+  })
+
+  it('falls back to the supplied PDF filename when Content-Disposition is absent', async () => {
+    fetchMock.mockResolvedValue(new Response(new Blob(['%PDF-x']), { status: 200 }))
+
+    const result = await downloadGeneratedDocumentPdf(21, 'GEN-001.pdf')
+
+    expect(result.filename).toBe('GEN-001.pdf')
+  })
+
+  it('converts a 404 PDF download into a typed ApiError', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(404, { detail: 'The requested file does not exist.' }))
+
+    await expect(downloadGeneratedDocumentPdf(999)).rejects.toMatchObject({
       status: HTTP_STATUS.NOT_FOUND,
     })
   })

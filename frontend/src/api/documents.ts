@@ -34,12 +34,21 @@ import type {
  *   * `GET /generated-documents/versions/:versionId/docx/` → authenticated
  *     DOCX download (binary, `Content-Disposition` attachment, DOCX MIME).
  *     Requires a **version** id — the detail serializer exposes no version ids.
+ *   * `POST /generated-documents/versions/:versionId/generate-pdf/` →
+ *     **PDF generation** — synchronous conversion of an already-generated
+ *     DOCX *version* to PDF; no body is consumed. Returns the
+ *     `GeneratedDocumentVersion` with `storage.pdf` true (503 when the
+ *     LibreOffice conversion runtime is unavailable, 400 on conversion
+ *     failure). Requires a **version** id.
+ *   * `GET /generated-documents/versions/:versionId/pdf/` → authenticated
+ *     PDF download (binary, `Content-Disposition` attachment, `application/pdf`).
  *
  * The company is never sent from the client — the backend derives it from the
  * authenticated user's tenant (a body `company_id` is ignored).
  */
 
 const DEFAULT_DOCX_FILENAME = 'document.docx'
+const DEFAULT_PDF_FILENAME = 'document.pdf'
 
 function filenameFromContentDisposition(response: Response): string | null {
   const value = response.headers.get('Content-Disposition')
@@ -67,6 +76,18 @@ export function generateDocumentDocx(id: number): Promise<GeneratedDocumentVersi
   return apiClient.post<GeneratedDocumentVersion>(`/generated-documents/${id}/generate/`, {})
 }
 
+/**
+ * Generate a PDF for an already-generated DOCX version, synchronously
+ * (`POST /generated-documents/versions/:versionId/generate-pdf/`). No body is
+ * consumed by the backend.
+ */
+export function generateGeneratedDocumentPdf(versionId: number): Promise<GeneratedDocumentVersion> {
+  return apiClient.post<GeneratedDocumentVersion>(
+    `/generated-documents/versions/${versionId}/generate-pdf/`,
+    {},
+  )
+}
+
 /** List a document's generated versions (`GET /generated-documents/:id/versions/`). */
 export function listGeneratedDocumentVersions(id: number): Promise<GeneratedDocumentVersion[]> {
   return apiClient.get<GeneratedDocumentVersion[]>(`/generated-documents/${id}/versions/`)
@@ -77,22 +98,47 @@ export interface DocumentDownload {
   filename: string
 }
 
+type VersionFileKind = 'docx' | 'pdf'
+
+const FILE_PATH_SEGMENT: Record<VersionFileKind, string> = { docx: 'docx', pdf: 'pdf' }
+
+async function downloadVersionFile(
+  versionId: number,
+  kind: VersionFileKind,
+  fallbackFilename: string,
+): Promise<DocumentDownload> {
+  const response = await apiClient.raw(`/generated-documents/versions/${versionId}/${FILE_PATH_SEGMENT[kind]}/`)
+  const blob = await response.blob()
+  return {
+    blob,
+    filename: filenameFromContentDisposition(response) ?? fallbackFilename,
+  }
+}
+
 /**
  * Download a document version's DOCX through the authenticated endpoint
  * (`GET /generated-documents/versions/:versionId/docx/`). The filename is taken
  * from the response's `Content-Disposition` when present, falling back to
  * `fallbackFilename`. Never a `/media/...` URL, never a token in a URL.
  */
-export async function downloadGeneratedDocumentDocx(
+export function downloadGeneratedDocumentDocx(
   versionId: number,
   fallbackFilename: string = DEFAULT_DOCX_FILENAME,
 ): Promise<DocumentDownload> {
-  const response = await apiClient.raw(`/generated-documents/versions/${versionId}/docx/`)
-  const blob = await response.blob()
-  return {
-    blob,
-    filename: filenameFromContentDisposition(response) ?? fallbackFilename,
-  }
+  return downloadVersionFile(versionId, 'docx', fallbackFilename)
+}
+
+/**
+ * Download a document version's PDF through the authenticated endpoint
+ * (`GET /generated-documents/versions/:versionId/pdf/`). The filename is taken
+ * from the response's `Content-Disposition` when present, falling back to
+ * `fallbackFilename`. Never a `/media/...` URL, never a token in a URL.
+ */
+export function downloadGeneratedDocumentPdf(
+  versionId: number,
+  fallbackFilename: string = DEFAULT_PDF_FILENAME,
+): Promise<DocumentDownload> {
+  return downloadVersionFile(versionId, 'pdf', fallbackFilename)
 }
 
 export function createGeneratedDocument(

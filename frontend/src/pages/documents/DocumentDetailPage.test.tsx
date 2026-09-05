@@ -30,8 +30,15 @@ const versionWithDocx: GeneratedDocumentVersion = {
   storage: { docx: true, pdf: false },
 }
 
-function docxDownloadResponse(filename = 'INV-001-v2.docx'): Response {
-  return new Response(new Blob(['fake-docx'], { type: 'application/octet-stream' }), {
+const versionWithPdf: GeneratedDocumentVersion = {
+  ...versionV1,
+  id: 22,
+  version_number: 2,
+  storage: { docx: true, pdf: true },
+}
+
+function fileDownloadResponse(kind: 'docx' | 'pdf', filename = `INV-001-v2.${kind}`): Response {
+  return new Response(new Blob([kind === 'pdf' ? '%PDF-fake' : 'fake-docx']), {
     status: 200,
     headers: { 'Content-Disposition': `attachment; filename="${filename}"` },
   })
@@ -68,16 +75,23 @@ describe('DocumentDetailPage', () => {
     options: {
       detail?: () => Promise<Response>
       versions?: GeneratedDocumentVersion[]
-      generate?: (input: RequestInfo | URL) => Promise<Response>
+      generateDocx?: (input: RequestInfo | URL) => Promise<Response>
+      generatePdf?: (input: RequestInfo | URL) => Promise<Response>
     } = {},
   ) {
     let currentVersions = options.versions ?? []
-    const onGenerate = options.generate
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
-      if (method === 'POST' && url.includes('/generate/')) {
-        if (onGenerate) return onGenerate(input)
+      if (method === 'POST' && url.endsWith('/generate-pdf/')) {
+        if (options.generatePdf) return options.generatePdf(input)
+        currentVersions = currentVersions.map((version) =>
+          version.id === 22 ? { ...version, storage: { docx: true, pdf: true } } : version,
+        )
+        return Promise.resolve(jsonResponse(200, versionWithPdf))
+      }
+      if (method === 'POST' && url.endsWith('/generate/')) {
+        if (options.generateDocx) return options.generateDocx(input)
         const created = versionWithDocx
         currentVersions = [...currentVersions, created]
         return Promise.resolve(jsonResponse(201, created))
@@ -85,8 +99,11 @@ describe('DocumentDetailPage', () => {
       if (url.endsWith(`/api/generated-documents/${doc.id}/versions/`)) {
         return Promise.resolve(jsonResponse(200, currentVersions))
       }
-      if (url.endsWith('/api/generated-documents/versions/' + versionWithDocx.id + '/docx/')) {
-        return Promise.resolve(docxDownloadResponse())
+      if (url.endsWith(`/api/generated-documents/versions/${versionWithDocx.id}/docx/`)) {
+        return Promise.resolve(fileDownloadResponse('docx'))
+      }
+      if (url.endsWith(`/api/generated-documents/versions/${versionWithPdf.id}/pdf/`)) {
+        return Promise.resolve(fileDownloadResponse('pdf'))
       }
       if (options.detail) return options.detail()
       return Promise.resolve(jsonResponse(200, doc))
@@ -166,7 +183,7 @@ describe('DocumentDetailPage', () => {
 
   it('prevents duplicate generation requests while one is in flight', async () => {
     let resolveGenerate: (value: Response) => void = () => {}
-    stubBackend({ generate: () => new Promise<Response>((resolve) => { resolveGenerate = resolve }) })
+    stubBackend({ generateDocx: () => new Promise<Response>((resolve) => { resolveGenerate = resolve }) })
     renderDetail()
     await screen.findByRole('button', { name: /generate docx/i })
 
@@ -187,7 +204,7 @@ describe('DocumentDetailPage', () => {
 
   it('shows a backend error when generation fails', async () => {
     stubBackend({
-      generate: () =>
+      generateDocx: () =>
         Promise.resolve(
           jsonResponse(400, { detail: 'Document generation failed. Check the document, client, and template version data.' }),
         ),
@@ -202,7 +219,7 @@ describe('DocumentDetailPage', () => {
 
   it('shows a permission error when generation is forbidden', async () => {
     stubBackend({
-      generate: () =>
+      generateDocx: () =>
         Promise.resolve(jsonResponse(403, { detail: 'Missing required permission: generated_documents.generate' })),
     })
     renderDetail()
@@ -217,7 +234,7 @@ describe('DocumentDetailPage', () => {
 
   it('respects Retry-After when generation is rate limited', async () => {
     stubBackend({
-      generate: () =>
+      generateDocx: () =>
         Promise.resolve(
           new Response(JSON.stringify({ detail: 'Request was throttled.' }), {
             status: 429,
@@ -266,6 +283,181 @@ describe('DocumentDetailPage', () => {
     }
   })
 
+  it('offers Generate PDF when a DOCX version exists without a PDF', async () => {
+    stubBackend({ versions: [versionWithDocx] })
+    renderDetail()
+
+    expect(await screen.findByRole('button', { name: /generate pdf/i })).toBeInTheDocument()
+    expect(screen.getByText('No PDF generated yet.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /download docx/i })).toBeInTheDocument()
+  })
+
+  it('offers Download PDF once a version has both a DOCX and a PDF', async () => {
+    stubBackend({ versions: [versionWithPdf] })
+    renderDetail()
+
+    expect(await screen.findByRole('button', { name: /download pdf/i })).toBeInTheDocument()
+    expect(screen.getByText(/PDF file available \(version 2\)/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /download docx/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /generate pdf/i })).not.toBeInTheDocument()
+  })
+
+  it('generates a PDF, shows the state, and refreshes the generated files', async () => {
+    stubBackend({ versions: [versionWithDocx] })
+    renderDetail()
+    await screen.findByRole('button', { name: /generate pdf/i })
+
+    await user.click(screen.getByRole('button', { name: /generate pdf/i }))
+
+    const [url] = await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([callUrl, callInit]) => {
+        const initObject = callInit as RequestInit | undefined
+        return String(callUrl).endsWith('/generate-pdf/') && (initObject?.method ?? 'GET') === 'POST'
+      })
+      expect(call).toBeDefined()
+      return call as [string, RequestInit]
+    })
+    expect(url).toBe('/api/generated-documents/versions/22/generate-pdf/')
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/PDF generated for version 2/i)
+    expect(await screen.findByRole('button', { name: /download pdf/i })).toBeInTheDocument()
+  })
+
+  it('keeps the DOCX download independent while a PDF is generated', async () => {
+    let resolveGeneratePdf: (value: Response) => void = () => {}
+    stubBackend({
+      versions: [versionWithDocx],
+      generatePdf: () =>
+        new Promise<Response>((resolve) => {
+          resolveGeneratePdf = resolve
+        }),
+    })
+    renderDetail()
+    await screen.findByRole('button', { name: /generate pdf/i })
+
+    await user.click(screen.getByRole('button', { name: /generate pdf/i }))
+
+    const generatingPdf = screen.getByRole('button', { name: /generating pdf/i })
+    expect(generatingPdf).toBeDisabled()
+    expect(screen.getByRole('button', { name: /download docx/i })).not.toBeDisabled()
+
+    resolveGeneratePdf(jsonResponse(200, versionWithPdf))
+    await screen.findByText(/PDF generated for version 2/i)
+  })
+
+  it('prevents duplicate PDF generation requests while one is in flight', async () => {
+    let resolveGeneratePdf: (value: Response) => void = () => {}
+    stubBackend({
+      versions: [versionWithDocx],
+      generatePdf: () =>
+        new Promise<Response>((resolve) => {
+          resolveGeneratePdf = resolve
+        }),
+    })
+    renderDetail()
+    await screen.findByRole('button', { name: /generate pdf/i })
+
+    await user.click(screen.getByRole('button', { name: /generate pdf/i }))
+
+    const generatingPdf = screen.getByRole('button', { name: /generating pdf/i })
+    expect(generatingPdf).toBeDisabled()
+    await user.click(generatingPdf)
+
+    const pdfCalls = fetchMock.mock.calls.filter(([callUrl, callInit]) => {
+      const initObject = callInit as RequestInit | undefined
+      return String(callUrl).endsWith('/generate-pdf/') && (initObject?.method ?? 'GET') === 'POST'
+    })
+    expect(pdfCalls).toHaveLength(1)
+
+    resolveGeneratePdf(jsonResponse(200, versionWithPdf))
+    await screen.findByText(/PDF generated for version 2/i)
+  })
+
+  it('shows the backend error when the PDF conversion runtime is unavailable', async () => {
+    stubBackend({
+      versions: [versionWithDocx],
+      generatePdf: () =>
+        Promise.resolve(jsonResponse(503, { detail: 'PDF conversion is currently unavailable.' })),
+    })
+    renderDetail()
+    await screen.findByRole('button', { name: /generate pdf/i })
+
+    await user.click(screen.getByRole('button', { name: /generate pdf/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/PDF conversion is currently unavailable/i)
+  })
+
+  it('shows a permission error when PDF generation is forbidden', async () => {
+    stubBackend({
+      versions: [versionWithDocx],
+      generatePdf: () =>
+        Promise.resolve(jsonResponse(403, { detail: 'Missing required permission: generated_documents.generate' })),
+    })
+    renderDetail()
+    await screen.findByRole('button', { name: /generate pdf/i })
+
+    await user.click(screen.getByRole('button', { name: /generate pdf/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /do not have permission to generate or download this document/i,
+    )
+  })
+
+  it('downloads the PDF through the authenticated endpoint with the response filename', async () => {
+    const createSpy = vi.fn(() => 'blob:mock')
+    const revokeSpy = vi.fn()
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const originalCreate = URL.createObjectURL
+    const originalRevoke = URL.revokeObjectURL
+    URL.createObjectURL = createSpy
+    URL.revokeObjectURL = revokeSpy
+    try {
+      stubBackend({ versions: [versionWithPdf] })
+      renderDetail()
+      await screen.findByRole('button', { name: /download pdf/i })
+
+      await user.click(screen.getByRole('button', { name: /download pdf/i }))
+
+      await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1))
+      const downloadCall = fetchMock.mock.calls.find(([callUrl, callInit]) => {
+        const initObject = callInit as RequestInit | undefined
+        return String(callUrl).endsWith('/pdf/') && (initObject?.method ?? 'GET') === 'GET'
+      })
+      expect(downloadCall).toBeDefined()
+      expect(String((downloadCall as [string, RequestInit])[0])).toBe(
+        '/api/generated-documents/versions/22/pdf/',
+      )
+      expect(clickSpy).toHaveBeenCalledTimes(1)
+      expect(revokeSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      URL.createObjectURL = originalCreate
+      URL.revokeObjectURL = originalRevoke
+      clickSpy.mockRestore()
+    }
+  })
+
+  it('shows a safe error when the PDF download fails', async () => {
+    stubBackend({ versions: [versionWithPdf] })
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/api/generated-documents/versions/22/pdf/')) {
+        return Promise.resolve(jsonResponse(404, { detail: 'The requested file does not exist.' }))
+      }
+      if (url.endsWith(`/api/generated-documents/${doc.id}/versions/`)) {
+        return Promise.resolve(jsonResponse(200, [versionWithPdf]))
+      }
+      return Promise.resolve(jsonResponse(200, doc))
+    })
+    renderDetail()
+    await screen.findByRole('button', { name: /download pdf/i })
+
+    await user.click(screen.getByRole('button', { name: /download pdf/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /document or its generated file is not available/i,
+    )
+  })
+
   it('shows a loading state on the download button while downloading', async () => {
     let resolveDownload: (value: Response) => void = () => {}
     stubBackend({
@@ -289,7 +481,7 @@ describe('DocumentDetailPage', () => {
     const downloading = screen.getByRole('button', { name: /downloading/i })
     expect(downloading).toBeDisabled()
 
-    resolveDownload(docxDownloadResponse())
+    resolveDownload(fileDownloadResponse('docx'))
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /downloading/i })).not.toBeInTheDocument(),
     )

@@ -3,6 +3,9 @@
 Frontend application for the GRM CRM Django backend.
 
 Implemented so far:
+- **PDF generation + download** (Phase 6.5): on `/documents/:documentId`, a
+  generated document's DOCX version can be converted to PDF and the resulting
+  file downloaded through the authenticated backend endpoints.
 - **DOCX generation + download** (Phase 6.4): on `/documents/:documentId`, a
   generated document can be generated (synchronous DOCX) and the resulting file
   downloaded through the authenticated backend endpoints.
@@ -27,7 +30,7 @@ Implemented so far:
   initialization, protected routes, automatic access-token refresh, logout.
 - **Technical foundation** (Phase 1): routing, Tailwind, the generic API
   client, the typed error model.
-- PDF generation/download, document editing, deletion, regeneration and version
+- Document editing, deletion, regeneration (a dedicated UI action) and version
   management are not implemented yet — later Generated Documents tasks.
 
 ## Stack
@@ -207,8 +210,10 @@ sends `company_id`).
 | `GET /api/generated-documents/:id/` | **detail** | `getGeneratedDocument(id)` |
 | `POST /api/generated-documents/` | **create** a document (201) | `createGeneratedDocument(input)` |
 | `POST /api/generated-documents/:id/generate/` | **generate DOCX** (201, synchronous) | `generateDocumentDocx(id)` |
-| `GET /api/generated-documents/:id/versions/` | version list (`storage.docx`) | `listGeneratedDocumentVersions(id)` |
+| `POST /api/generated-documents/versions/:versionId/generate-pdf/` | **generate PDF** (synchronous) | `generateGeneratedDocumentPdf(versionId)` |
+| `GET /api/generated-documents/:id/versions/` | version list (`storage.docx`/`storage.pdf`) | `listGeneratedDocumentVersions(id)` |
 | `GET /api/generated-documents/versions/:versionId/docx/` | **authenticated DOCX download** | `downloadGeneratedDocumentDocx(versionId, fallback)` |
+| `GET /api/generated-documents/versions/:versionId/pdf/` | **authenticated PDF download** | `downloadGeneratedDocumentPdf(versionId, fallback)` |
 
 - The list shows the fields the backend actually returns: `document_number`,
   `document_type_code`, `client_id` (displayed as `Client #<id>` because the
@@ -240,35 +245,45 @@ render one safe "Document not found" state. Other states: loading (no
 fabricated data), 403 → safe access-denied message, and a generic error with a
 retry action. No `company_id` is ever sent.
 
-### DOCX generation and download (`/documents/:documentId`)
+### DOCX and PDF generation/download (`/documents/:documentId`)
 
-The backend stores a generated DOCX on a **GeneratedDocumentVersion** (not on
-the document row), so the detail page also fetches
-`listGeneratedDocumentVersions(id)` (`GET /api/generated-documents/:id/versions/`)
+The backend stores a generated DOCX (and an optional PDF conversion) on a
+**GeneratedDocumentVersion** (not on the document row), so the detail page also
+fetches `listGeneratedDocumentVersions(id)` (`GET /api/generated-documents/:id/versions/`)
 and exposes a "Generated file" section using the actual version state
-(`storage.docx`):
+(`storage.docx` / `storage.pdf`):
 
 | Backend endpoint | Operation | API module fn |
 |---|---|---|
 | `POST /api/generated-documents/:id/generate/` | **generate a DOCX** (201, **synchronous**) | `generateDocumentDocx(id)` |
-| `GET /api/generated-documents/:id/versions/` | version list (`storage.docx` availability) | `listGeneratedDocumentVersions(id)` |
 | `GET /api/generated-documents/versions/:versionId/docx/` | **authenticated DOCX download** | `downloadGeneratedDocumentDocx(versionId, fallback)` |
+| `POST /api/generated-documents/versions/:versionId/generate-pdf/` | **generate a PDF** from a DOCX version (**synchronous**) | `generateGeneratedDocumentPdf(versionId)` |
+| `GET /api/generated-documents/:id/versions/` | version list (`storage.docx`/`storage.pdf`) | `listGeneratedDocumentVersions(id)` |
+| `GET /api/generated-documents/versions/:versionId/pdf/` | **authenticated PDF download** | `downloadGeneratedDocumentPdf(versionId, fallback)` |
 
-- **Generation** is synchronous: `POST .../generate/` renders and persists a DOCX
-  and returns the created `GeneratedDocumentVersion` (no polling needed).
+- **DOCX generation** is synchronous: `POST .../generate/` renders and persists a
+  DOCX and returns the created `GeneratedDocumentVersion` (no polling needed).
   Regenerating creates a new version. The detail page's "Generate DOCX" button
   appears when no version has a DOCX, disables while in flight (no duplicate
   requests), shows the backend result (`DOCX generated as version N.`), and then
   re-fetches the versions so the button flips to "Download DOCX".
-- **Download** uses the version-based authenticated endpoint via the shared API
+- **PDF generation** converts an already-generated DOCX *version* to PDF:
+  `POST .../versions/:versionId/generate-pdf/` runs synchronously (no body, no
+  polling) and returns the same version with `storage.pdf` true. It appears as
+  "Generate PDF"/"Download PDF" driven by the version's real `storage.pdf`
+  state, with its own loading state that does not block the DOCX actions. A 503
+  (LibreOffice runtime unavailable) or 400 (conversion failure) is surfaced as a
+  safe message.
+- **Downloads** use the version-based authenticated endpoints via the shared API
   client's `raw` (bearer-token) capability — never `/media/...`, never a token
   in a URL, never a storage path. The `Blob` is saved with the filename from the
   response's `Content-Disposition` (backend returns
-  `<document_number>-v<version_number>.docx`), falling back to a document-based
-  name. The temporary object URL is revoked after use.
+  `<document_number>-v<version_number>.docx/.pdf`), falling back to a
+  document-based name. The temporary object URL is revoked after use.
 - Errors: 403 → safe permission message, 404 → file unavailable, 429 → respects
-  `Retry-After`, 5xx → generic message; generation/download failures never
-  render binary or raw server content.
+  `Retry-After`, 5xx (and the PDF-specific 503) → safe message; generation and
+  download failures never render binary or raw server content. DOCX and PDF
+  loading states are independent.
 
 ### Creating a document (`/documents/new`)
 
@@ -387,14 +402,19 @@ line-item add/edit/remove and submission, form validation, successful creation
 + redirect, duplicate-submit prevention, backend field / nested line-item /
 non-field errors, cancellation), the detail page (loading, metadata
 rendering incl. status badge and client/template links, non-numeric id, 404 /
-403 / generic error / retry, back navigation), and DOCX generation + download
+403 / generic error / retry, back navigation), DOCX generation + download
 (API: generate method/body/response, version list, DOCX download blob +
 Content-Disposition filename + fallback + 404; page: Generate/Download button
 appearance from `storage.docx`, generation loading + duplicate prevention +
 success notice + state refresh + failures incl. 403/429, download loading +
-successful blob download + safe failure), plus protected routing for
-`/templates`, `/templates/new`, `/templates/:templateId`, `/documents`,
-`/documents/new`, and `/documents/:documentId`.
+successful blob download + safe failure), and PDF generation + download
+(API: generate-pdf method/body/response + 503, PDF download blob + filename +
+fallback + 404; page: Generate/Download PDF button appearance from
+`storage.pdf`, PDF generation loading + duplicate prevention + success + state
+refresh + 403/503 failures, independent DOCX/PDF loading, PDF download loading
++ success + safe failure), plus protected routing for `/templates`,
+`/templates/new`, `/templates/:templateId`, `/documents`, `/documents/new`, and
+`/documents/:documentId`.
 
 ## Known limitations
 
@@ -423,15 +443,16 @@ successful blob download + safe failure), plus protected routing for
   with an active version** for the chosen document type and a currency for the
   initial version — otherwise the backend rejects creation with a clear
   `detail` message (surfaced by the create form).
-- Document editing, deletion, **PDF generation/download**, regeneration (a
-  dedicated UI action) and version management are not implemented — these are
-  later Generated Documents phases. DOCX generation requires the document's
-  template to have an **active version with a file**; otherwise the backend
-  rejects it and the frontend surfaces the safe error message.
-- The DOCX file lives on a document *version*; the download endpoint needs a
-  version id, so file availability (`storage.docx`) is read from the versions
-  list. There is no line-item/totals view yet (the detail serializer returns
-  none).
+- Document editing, deletion, regeneration (a dedicated UI action) and version
+  management are not implemented — later Generated Documents phases. DOCX
+  generation requires the document's template to have an **active version with a
+  file**; PDF generation additionally requires an already-generated DOCX version
+  and the LibreOffice conversion runtime on the server (otherwise the backend
+  returns 400/503 and the frontend surfaces the safe message).
+- The DOCX/PDF files live on a document *version*; the download/generate-pdf
+  endpoints need a version id, so file availability (`storage.docx` /
+  `storage.pdf`) is read from the versions list. There is no line-item/totals
+  view yet (the detail serializer returns none).
 - Nested client editing (addresses / contacts / bank accounts) is a separate
   later phase; this phase only displays the read-only data already returned by
   the client detail endpoint.
