@@ -3,6 +3,9 @@
 Frontend application for the GRM CRM Django backend.
 
 Implemented so far:
+- **Document templates vertical slice** (Phase 5): template list with a
+  document-type filter, create, detail (metadata, current file, upload/replace,
+  download, version history, create/activate version), and soft-delete.
 - **Clients vertical slice** (Phase 4): client list with search/filters, create,
   detail (with read-only nested data), edit, and soft-delete confirmation.
 - **Application shell + dashboard** (Phase 3): authenticated shell (responsive
@@ -11,8 +14,8 @@ Implemented so far:
   initialization, protected routes, automatic access-token refresh, logout.
 - **Technical foundation** (Phase 1): routing, Tailwind, the generic API
   client, the typed error model.
-- Template management and document generation/PDF UI are not implemented yet —
-  those routes are placeholders.
+- Document *generation* (creating filled documents from templates) and PDF UI
+  are not implemented yet — the `/documents` route is still a placeholder.
 
 ## Stack
 
@@ -113,14 +116,81 @@ company (the frontend never sends `company_id`).
   as safe messages — never raw backend internals. 401 is handled by the
   existing refresh flow.
 
+## Document templates
+
+`/templates` (`src/pages/templates/`) is a Document Templates vertical slice
+backed by the existing Django `document_templates` API — the company is always
+the authenticated user's company (the frontend never sends `company_id`).
+
+| Backend endpoint | Operation | API module fn |
+|---|---|---|
+| `GET /api/document-templates/` | list (plain array, **no pagination**) | `listTemplates(params)` |
+| `GET /api/document-templates/?document_type=<id>` | filter by document type | `listTemplates({ document_type })` |
+| `POST /api/document-templates/` | create (201) | `createTemplate(input)` |
+| `GET /api/document-templates/:id/` | detail | `getTemplate(id)` |
+| `DELETE /api/document-templates/:id/` | **soft-delete** (204) | `deleteTemplate(id)` |
+| `GET /api/document-templates/:id/file/` | authenticated file download (binary) | `downloadTemplateFile(id)` |
+| `POST /api/document-templates/:id/file/` | upload / replace the `.docx` (201) | `uploadTemplateFile(id, file)` |
+| `DELETE /api/document-templates/:id/file/` | remove the file (204) | `deleteTemplateFile(id)` |
+| `GET /api/document-templates/:id/versions/` | version list | `listTemplateVersions(id)` |
+| `POST /api/document-templates/:id/versions/` | create a version from the current file (201) | `createTemplateVersion(id)` |
+| `POST /api/document-templates/:id/versions/:vid/activate/` | activate a version | `activateTemplateVersion(id, vid)` |
+| `GET /api/reference-data/document-types/` | document-type catalog for the form/filter | `fetchDocumentTypes()` |
+
+- **List** (`/templates`) — a table of the backend's templates (name, document
+  type, active status, current file basename, updated date). The only supported
+  filter is the backend `document_type` query parameter, kept in the URL so
+  refresh / back-forward preserve the state. The backend supports no search /
+  ordering / pagination, so none is shown. The document-type filter options come
+  from the read-only reference-data catalog; if that catalog call fails the
+  list still works (only the filter is disabled).
+- **Create** (`/templates/new`) — form with the real serializer fields:
+  required `name` and `document_type` (from the reference-data catalog) plus
+  the optional `is_active` flag. The backend does **not** require a file at
+  creation time, so no file upload is collected here. The company is never sent.
+- **Detail** (`/templates/:templateId`) — template metadata (document type,
+  active status, current file basename, created/updated), the **authenticated
+  file download** button, an upload/replace form, version creation, and the
+  version history. The backend returns 404 for both missing and cross-tenant
+  templates, so both render one safe "Template not found" state.
+- **Authenticated download** — files are never fetched from `/media/...`;
+  downloads go through `GET /api/document-templates/:id/file/` via the shared
+  API client (which attaches the bearer token and runs the existing 401 →
+  refresh → retry flow). The binary response is turned into a `Blob` and
+  downloaded with the filename from the response's `Content-Disposition` header
+  (falling back to `template.docx`). The raw storage path is never exposed or
+  logged.
+- **Upload / replace** — a single `.docx` file is uploaded to the dedicated
+  file endpoint as `FormData` (multipart boundary left to the browser; no
+  manual `Content-Type`). Validates the `.docx` extension client-side before
+  sending and surfaces backend validation errors (size / not-a-valid-docx /
+  forbidden) afterward. After a successful upload the template metadata and
+  version history are refreshed from the backend.
+- **Versioning** — `POST .../versions/` snapshots the template's **current
+  file** as a new immutable version (the new version becomes the active one, as
+  the backend contract dictates — the frontend does not invent this). Version
+  activation uses the dedicated `.../versions/:vid/activate/` endpoint after an
+  explicit confirmation step, then refetches the versions so the single-active
+  invariant always reflects the server. A failed version section never takes
+  down the rest of the page.
+- **Delete** — soft-delete with an explicit inline confirmation step; after
+  success the app returns to the template list. (Removing just the *file* — not
+  the row — is a separate `DELETE .../file/` operation supported by the backend
+  but intentionally not surfaced as a UI action in this phase.)
+- Errors use the typed `ApiError`: 400 field/validation errors inline, 403 a
+  safe access-denied state, 404 a safe not-found state, 429 a friendly retry
+  message, and 5xx a generic message — never raw backend internals.
+
 ## API client
 
 `src/api/client.ts` is the single HTTP entry point: GET/POST/PUT/PATCH/DELETE,
 JSON and FormData bodies, automatic bearer-token header, 401 → refresh → retry
 once, and conversion of every failed response into a typed `ApiError` (status,
-payload, `fieldErrors`, `Retry-After`, safe message). Small read-only modules
-built on it for the dashboard: `src/api/clients.ts`, `templates.ts`,
-`documents.ts` (no business features behind them yet).
+payload, `fieldErrors`, `Retry-After`, safe message). `apiClient.raw` returns
+the unparsed `Response` for authenticated binary downloads — it still carries
+the bearer token and the same refresh/error handling. Small modules built on it
+for the dashboard and features: `src/api/clients.ts`, `src/api/templates.ts`,
+`src/api/documents.ts`, `src/api/referenceData.ts`.
 
 ## Authentication flow
 
@@ -157,7 +227,9 @@ trigger the refresh flow.
 /clients/new   → create client (protected, inside AppShell)
 /clients/:clientId       → client detail (protected, inside AppShell)
 /clients/:clientId/edit  → edit client (protected, inside AppShell)
-/templates     → protected placeholder (inside AppShell)
+/templates     → template list (protected, inside AppShell)
+/templates/new → create template (protected, inside AppShell)
+/templates/:templateId → template detail (protected, inside AppShell)
 /documents     → protected placeholder (inside AppShell)
 *              → not found
 ```
@@ -175,9 +247,18 @@ Vitest + Testing Library (jsdom). Tests mock `fetch` at the API-client
 boundary — no real backend needed. Coverage includes the API client, auth
 state, login page, protected routing, the application shell, the dashboard
 (loading / data / empty / error / partial-failure), the dashboard API modules,
-the clients API module, and the client list / create / detail / edit pages
+the clients API module, the client list / create / detail / edit pages
 (loading, success, empty, error/retry, validation, delete confirmation,
-navigation, and URL search/filter behavior).
+navigation, and URL search/filter behavior), and the document-templates slice:
+the templates + reference-data API modules (methods, bodies, FormData upload,
+query params, binary download), the template list (loading / data / empty /
+error/retry / document-type filter / navigation), the create form (fields,
+validation, success, backend errors, duplicate-submission guard, redirect), the
+detail page (metadata, active version, version history, empty versions, 404 /
+403 / 5xx, upload incl. `.docx` validation and backend errors, authenticated
+download with filename handling, create/activate version incl. in-flight
+activation state and activation error, delete confirmation), and protected
+routing for `/templates`, `/templates/new`, and `/templates/:templateId`.
 
 ## Known limitations
 
@@ -192,9 +273,19 @@ navigation, and URL search/filter behavior).
   `document_templates.read`, and `generated_documents.read` backend
   permissions; unauthorized sections show a safe error state rather than the
   data. (The full client CRUD likewise requires the matching `clients.*`
-  permissions.)
-- The client list is not paginated (the backend returns a plain array).
+  permissions, and the template operations require the corresponding
+  `document_templates.*` / `document_templates.version_*` permissions.)
+- The template and client lists are not paginated (the backend returns plain
+  arrays).
 - Nested client editing (addresses / contacts / bank accounts) is a separate
   later phase; this phase only displays the read-only data already returned by
   the client detail endpoint.
+- The template file **remove-only** endpoint (`DELETE .../file/`, which clears
+  the current file without deleting the template) exists on the backend but is
+  not surfaced as a UI action in this phase.
+- Version *creation* requires the template to already have a current file (the
+  backend rejects it otherwise), and validates placeholders in the document's
+  text — invalid/unknown placeholders are reported as a version-creation error.
+- Document **generation** (filling templates to produce numbered documents) and
+  the PDF UI are not implemented — `/documents` is still a placeholder.
 - There is no registration, password reset, or account management UI.

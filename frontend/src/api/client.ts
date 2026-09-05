@@ -21,6 +21,9 @@ import {
  *   all concurrent requests) and retries the original request exactly once.
  *   If the refresh cannot recover, it clears both tokens and notifies
  *   subscribers via {@link onUnauthorized}.
+ * * `apiClient.raw` returns the unparsed `Response` (binary downloads); it
+ *   still carries the access token, refresh/retry handling, and the same error
+ *   conversion as every other request.
  */
 
 const DEFAULT_BASE_URL = '/api'
@@ -44,6 +47,9 @@ export interface ApiRequestOptions {
    *  requests, so login/refresh never recurse. */
   auth?: boolean
   signal?: AbortSignal
+  /** Return the raw `Response` instead of parsing the body (binary downloads).
+   *  Failed responses are still converted to {@link ApiError}. */
+  raw?: boolean
 }
 
 function isFormData(value: unknown): value is FormData {
@@ -193,7 +199,7 @@ async function executeRequest<T>(
   options: ApiRequestOptions,
   retried: boolean,
 ): Promise<T> {
-  const { method = 'GET', body, headers: extraHeaders, auth = true, signal } =
+  const { method = 'GET', body, headers: extraHeaders, auth = true, signal, raw = false } =
     options
 
   const headers = new Headers(extraHeaders)
@@ -202,7 +208,7 @@ async function executeRequest<T>(
     headers.set('Authorization', `Bearer ${token}`)
   }
   if (!headers.has('Accept')) {
-    headers.set('Accept', 'application/json')
+    headers.set('Accept', raw ? '*/*' : 'application/json')
   }
 
   let requestBody: BodyInit | undefined
@@ -236,6 +242,9 @@ async function executeRequest<T>(
   if (!response.ok) {
     throw await toApiError(response)
   }
+  if (raw) {
+    return response as unknown as T
+  }
   return parseSuccess<T>(response)
 }
 
@@ -266,4 +275,6 @@ export const apiClient = {
   ) => request<T>(path, { ...options, method: 'PATCH', body }),
   delete: <T>(path: string, options?: Omit<ApiRequestOptions, 'method' | 'body'>) =>
     request<T>(path, { ...options, method: 'DELETE' }),
+  raw: (path: string, options?: Omit<ApiRequestOptions, 'method' | 'body'>) =>
+    request<Response>(path, { ...options, method: 'GET', raw: true }),
 }

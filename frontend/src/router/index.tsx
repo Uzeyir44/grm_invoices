@@ -10,6 +10,8 @@ import { ClientsIndexPage } from '../pages/clients/ClientsIndexPage'
 import { DashboardIndexPage } from '../pages/dashboard/DashboardIndexPage'
 import { DocumentsIndexPage } from '../pages/documents/DocumentsIndexPage'
 import { NotFoundPage } from '../pages/NotFoundPage'
+import { TemplateCreatePage } from '../pages/templates/TemplateCreatePage'
+import { TemplateDetailPage } from '../pages/templates/TemplateDetailPage'
 import { TemplatesIndexPage } from '../pages/templates/TemplatesIndexPage'
 import { ProtectedRoute } from './ProtectedRoute'
 import { RedirectIfAuthenticated } from './RedirectIfAuthenticated'
@@ -34,6 +36,8 @@ export function AppRouter() {
           <Route path="clients/:clientId" element={<ClientDetailPage />} />
           <Route path="clients/:clientId/edit" element={<ClientEditPage />} />
           <Route path="templates" element={<TemplatesIndexPage />} />
+          <Route path="templates/new" element={<TemplateCreatePage />} />
+          <Route path="templates/:templateId" element={<TemplateDetailPage />} />
           <Route path="documents" element={<DocumentsIndexPage />} />
         </Route>
       </Route>

@@ -86,6 +86,19 @@ describe('apiClient', () => {
     expect(headers.get('Authorization')).toBeNull()
   })
 
+  it('returns the raw Response for binary downloads without parsing JSON', async () => {
+    const blob = new Blob(['binary'], { type: 'application/octet-stream' })
+    stubFetch(new Response(blob, { status: 200 }))
+    setAccessToken('token-1')
+
+    const response = await apiClient.raw('/document-templates/1/file/')
+
+    const { headers } = lastCall()
+    // Binary downloads do not force an Accept: application/json header.
+    expect(headers.get('Accept')).toBe('*/*')
+    await expect(response.blob()).resolves.toBeInstanceOf(Blob)
+  })
+
   it('returns undefined for 204 no-content responses', async () => {
     stubFetch(new Response(null, { status: 204 }))
     await expect(apiClient.delete('/clients/1')).resolves.toBeUndefined()

@@ -59,6 +59,9 @@ describe('App', () => {
       if (url.includes('/generated-documents/')) {
         return Promise.resolve(jsonResponse(200, []))
       }
+      if (url.includes('/reference-data/document-types/')) {
+        return Promise.resolve(jsonResponse(200, []))
+      }
       return Promise.resolve(jsonResponse(200, {}))
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -138,6 +141,28 @@ describe('App', () => {
       expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument()
       unmount()
     }
+  })
+
+  it('redirects unauthenticated users away from template routes', async () => {
+    for (const path of ['/templates', '/templates/new', '/templates/1']) {
+      const { unmount } = renderAt(path)
+      expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it('renders the template list inside the protected shell for authenticated users', async () => {
+    setAccessToken('token-1')
+    stubBackend()
+
+    renderAt('/templates')
+
+    expect(
+      await screen.findByRole('navigation', { name: /main navigation/i }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /templates/i })).toBeInTheDocument()
+    // The empty backend template list produces the empty state (no fabricated rows).
+    expect(await screen.findByText('No templates yet.')).toBeInTheDocument()
   })
 
   it('renders the client list inside the protected shell for authenticated users', async () => {
