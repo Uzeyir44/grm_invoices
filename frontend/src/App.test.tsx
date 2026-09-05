@@ -24,6 +24,20 @@ const ME = {
   company_name: 'Acme Co',
 }
 
+const DOC_DETAIL = {
+  id: 1,
+  company_id: 10,
+  document_type: 1,
+  document_type_code: 'invoice',
+  client_id: 1,
+  template_id: 1,
+  document_number: 'INV-001',
+  status: 'draft',
+  created_by_id: 1,
+  created_at: '2026-09-01T10:00:00+00:00',
+  updated_at: '2026-09-01T10:00:00+00:00',
+}
+
 function renderAt(path: string) {
   return render(
     <AuthProvider>
@@ -57,7 +71,10 @@ describe('App', () => {
         return Promise.resolve(jsonResponse(200, []))
       }
       if (url.includes('/generated-documents/')) {
-        return Promise.resolve(jsonResponse(200, []))
+        // List (exact) returns an empty array; a detail path returns one row.
+        return Promise.resolve(
+          jsonResponse(200, url.endsWith('/generated-documents/') ? [] : DOC_DETAIL),
+        )
       }
       if (url.includes('/reference-data/document-types/')) {
         return Promise.resolve(jsonResponse(200, []))
@@ -164,6 +181,25 @@ describe('App', () => {
     const { unmount } = renderAt('/documents/new')
     expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument()
     unmount()
+  })
+
+  it('redirects unauthenticated users away from the document detail route', async () => {
+    const { unmount } = renderAt('/documents/1')
+    expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument()
+    unmount()
+  })
+
+  it('renders the document detail page inside the protected shell for authenticated users', async () => {
+    setAccessToken('token-1')
+    stubBackend()
+
+    renderAt('/documents/1')
+
+    expect(
+      await screen.findByRole('navigation', { name: /main navigation/i }),
+    ).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /INV-001/ })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /back to documents/i })).toBeInTheDocument()
   })
 
   it('renders the document create form inside the protected shell for authenticated users', async () => {

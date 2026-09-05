@@ -10,6 +10,7 @@ function renderDocuments() {
     <MemoryRouter initialEntries={['/documents']}>
       <Routes>
         <Route path="/documents" element={<DocumentsIndexPage />} />
+        <Route path="/documents/:documentId" element={<div>detail-page</div>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -51,6 +52,30 @@ describe('DocumentsIndexPage', () => {
     expect(screen.getByText('Generated')).toBeInTheDocument()
     expect(screen.getByText('Draft')).toBeInTheDocument()
     expect(screen.getByRole('cell', { name: '2026-09-04' })).toBeInTheDocument()
+  })
+
+  it('links each document number to its detail route', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, generatedDocuments))
+    renderDocuments()
+
+    await screen.findByRole('link', { name: 'INV-001' })
+    expect(screen.getByRole('link', { name: 'INV-001' })).toHaveAttribute(
+      'href',
+      '/documents/9',
+    )
+    expect(screen.getByRole('link', { name: 'CC-001' })).toHaveAttribute(
+      'href',
+      '/documents/10',
+    )
+  })
+
+  it('navigates to a document detail page from a row', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, generatedDocuments))
+    renderDocuments()
+    await screen.findByRole('link', { name: 'INV-001' })
+
+    await user.click(screen.getByRole('link', { name: 'INV-001' }))
+    expect(await screen.findByText('detail-page')).toBeInTheDocument()
   })
 
   it('shows an empty state when the backend returns zero documents', async () => {

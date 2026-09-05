@@ -4,6 +4,11 @@
  * (`apps/generated_documents/api/serializers.py`).
  *
  * * `GET  /api/generated-documents/`      → array of `GeneratedDocument`
+ * * `GET  /api/generated-documents/:id/`  → `GeneratedDocument`
+ *                                        (same serializer as the list — the
+ *                                        detail response carries the same
+ *                                        metadata, no nested client/template/
+ *                                        version/line-item data)
  * * `POST /api/generated-documents/`      → create → `GeneratedDocument` (201)
  *
  * The create body (`GeneratedDocumentCreateSerializer`) accepts only reference

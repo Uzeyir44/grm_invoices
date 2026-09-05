@@ -3,6 +3,10 @@
 Frontend application for the GRM CRM Django backend.
 
 Implemented so far:
+- **Generated document detail** (Phase 6.3): `/documents/:documentId` opens a
+  document's metadata (number, document type, status, client/template
+  references, created/updated, creator). The documents list links each document
+  number to this page.
 - **Generated document creation** (Phase 6.2): `/documents/new` creates a real
   generated document (client + document type + currency + optional line items)
   through the backend creation endpoint.
@@ -20,8 +24,9 @@ Implemented so far:
   initialization, protected routes, automatic access-token refresh, logout.
 - **Technical foundation** (Phase 1): routing, Tailwind, the generic API
   client, the typed error model.
-- Document detail, editing, DOCX/PDF generation/download, and document
-  regeneration are not implemented yet — later Generated Documents tasks.
+- Document editing, deletion, DOCX/PDF generation/download, and document
+  regeneration (and version management) are not implemented yet — later
+  Generated Documents tasks.
 
 ## Stack
 
@@ -197,6 +202,7 @@ sends `company_id`).
 | Backend endpoint | Operation | API module fn |
 |---|---|---|
 | `GET /api/generated-documents/` | list (plain array, **no pagination**) | `listGeneratedDocuments()` / `fetchGeneratedDocuments()` (dashboard alias) |
+| `GET /api/generated-documents/:id/` | **detail** | `getGeneratedDocument(id)` |
 | `POST /api/generated-documents/` | **create** a document (201) | `createGeneratedDocument(input)` |
 
 - The list shows the fields the backend actually returns: `document_number`,
@@ -211,6 +217,24 @@ sends `company_id`).
   safe error state with a retry action. Errors use the typed `ApiError`
   (403 → safe access-denied message, 429 → retry message, 5xx → generic
   message); 401 is handled by the existing refresh flow.
+- Each row's document number links to `/documents/:documentId`.
+
+### Document detail (`/documents/:documentId`)
+
+`DocumentDetailPage` (`src/pages/documents/`) opens a single document via
+`getGeneratedDocument(id)` (`GET /api/generated-documents/:id/`). The backend's
+detail view uses the **same `GeneratedDocumentSerializer` as the list**, so the
+detail page shows the metadata that serializer returns: document number
+(heading), document type code, `status`, `client_id` and `template_id` (linked
+to the existing client / template detail routes), `created_at`, `updated_at`,
+and `created_by_id` (shown as `User #<id>`). The detail serializer returns no
+nested client/template/version/line-item/totals data, so none is shown.
+
+The backend returns 404 for missing and cross-tenant documents alike, so both
+render one safe "Document not found" state. Other states: loading (no
+fabricated data), 403 → safe access-denied message, and a generic error with a
+retry action. No `company_id` is ever sent. Document generation and DOCX/PDF
+download are **not** part of this scope and no such buttons are shown.
 
 ### Creating a document (`/documents/new`)
 
@@ -234,8 +258,7 @@ real `POST /api/generated-documents/` endpoint using the fields the backend
 
 Dependencies load independently with their own retry; a failed catalog is shown
 as an error, never as a silently empty list. Submission disables the button,
-prevents duplicate POSTs, and navigates back to `/documents` on success (a
-document-detail route does not exist yet, so there is no detail navigation).
+prevents duplicate POSTs, and navigates back to `/documents` on success.
 Backend field errors render next to the matching control, nested line-item
 errors render on the offending row, and `detail` messages (e.g. missing active
 template) render as a form-level message. `company_id` is never sent; the
@@ -292,6 +315,7 @@ trigger the refresh flow.
 /templates/:templateId → template detail (protected, inside AppShell)
 /documents     → generated document list (protected, inside AppShell)
 /documents/new → create generated document (protected, inside AppShell)
+/documents/:documentId → generated document detail (protected, inside AppShell)
 *              → not found
 ```
 
@@ -319,16 +343,19 @@ detail page (metadata, active version, version history, empty versions, 404 /
 403 / 5xx, upload incl. `.docx` validation and backend errors, authenticated
 download with filename handling, create/activate version incl. in-flight
 activation state and activation error, delete confirmation), and the generated
-documents slice: the documents API module (endpoint, no query params, create
-payload incl. no `company_id`, typed errors), the reference-data currency API,
-the documents list page (loading, data rendering, count, empty state,
-error/retry, no invented search/filter/pagination controls), and the create
-page (loading, per-dependency errors + retry, client / document-type /
-currency options, only document types with an active template, line-item
-add/edit/remove and submission, form validation, successful creation +
-redirect, duplicate-submit prevention, backend field / nested line-item /
-non-field errors, cancellation), plus protected routing for `/templates`,
-`/templates/new`, `/templates/:templateId`, `/documents`, and `/documents/new`.
+documents slice: the documents API module (endpoint, no query params, detail,
+create payload incl. no `company_id`, typed errors), the reference-data
+currency API, the documents list page (loading, data rendering, count, empty
+state, error/retry, no invented search/filter/pagination controls, detail
+links), the create page (loading, per-dependency errors + retry, client /
+document-type / currency options, only document types with an active template,
+line-item add/edit/remove and submission, form validation, successful creation
++ redirect, duplicate-submit prevention, backend field / nested line-item /
+non-field errors, cancellation), and the detail page (loading, metadata
+rendering incl. status badge and client/template links, non-numeric id, 404 /
+403 / generic error / retry, back navigation), plus protected routing for
+`/templates`, `/templates/new`, `/templates/:templateId`, `/documents`,
+`/documents/new`, and `/documents/:documentId`.
 
 ## Known limitations
 
@@ -350,17 +377,18 @@ non-field errors, cancellation), plus protected routing for `/templates`,
 - The generated documents list is **not** paginated and supports **no**
   search/filter/ordering parameters (the backend returns a plain array, newest
   first, with no query parameters), so none are shown.
-- The documents list serializer exposes only `client_id` for the client (no
-  client name), so rows show `Client #<id>`.
+- The generated-document list and detail serializers expose only `client_id`
+  and `template_id` (no client/template names), so those are shown as
+  `Client #<id>` / `Template #<id>` links to the existing detail routes.
 - Document creation requires the company to have an **active document template
   with an active version** for the chosen document type and a currency for the
   initial version — otherwise the backend rejects creation with a clear
   `detail` message (surfaced by the create form).
-- Document detail, editing, **generation** (DOCX/PDF), regeneration, and
-  DOCX/PDF download UI are not implemented — these are later Generated
-  Documents phases. Detail/generate/versions/download endpoints exist on the
-  backend but have no frontend yet. After creation the app returns to
-  `/documents` because no detail route exists.
+- Document editing, deletion, **generation** (DOCX/PDF), regeneration, version
+  management, and DOCX/PDF download UI are not implemented — these are later
+  Generated Documents phases. The detail page shows only what the detail
+  serializer returns (no line items/totals/versions), and detail/generate/
+  versions/download endpoints are not surfaced as actions.
 - Nested client editing (addresses / contacts / bank accounts) is a separate
   later phase; this phase only displays the read-only data already returned by
   the client detail endpoint.

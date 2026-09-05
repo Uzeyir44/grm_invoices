@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createGeneratedDocument,
   fetchGeneratedDocuments,
+  getGeneratedDocument,
   listGeneratedDocuments,
 } from './documents'
 import { generatedDocuments, jsonResponse } from '../test/documentFixtures'
@@ -125,5 +126,27 @@ describe('documents API', () => {
     expect(apiError.status).toBe(HTTP_STATUS.BAD_REQUEST)
     expect(apiError.fieldErrors.client_id).toEqual(['This field is required.'])
     expect(apiError.fieldErrors['items.0.quantity']).toEqual(['A valid number is required.'])
+  })
+
+  it('fetches a single document from the detail endpoint', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, generatedDocuments[0]))
+    setAccessToken('token-1')
+
+    const result = await getGeneratedDocument(9)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/generated-documents/9/')
+    expect(init.method).toBe('GET')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-1')
+    expect(result).toEqual(generatedDocuments[0])
+  })
+
+  it('converts a 404 detail response into a typed ApiError', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(404, { detail: 'No GeneratedDocument matches the given query.' }))
+
+    await expect(getGeneratedDocument(999)).rejects.toMatchObject({
+      status: HTTP_STATUS.NOT_FOUND,
+    })
+    await expect(getGeneratedDocument(999)).rejects.toBeInstanceOf(ApiError)
   })
 })

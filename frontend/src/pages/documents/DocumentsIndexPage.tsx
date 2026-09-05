@@ -1,22 +1,10 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import { listGeneratedDocuments } from '../../api/documents'
+import { DocumentStatusBadge } from '../../components/ui/DocumentStatusBadge'
 import { PageContainer } from '../../components/ui/PageContainer'
-import type { GeneratedDocument, GeneratedDocumentStatus } from '../../types/generatedDocument'
-
-const STATUS_LABELS: Record<GeneratedDocumentStatus, string> = {
-  draft: 'Draft',
-  generated: 'Generated',
-  sent: 'Sent',
-  void: 'Void',
-}
-
-const STATUS_CLASSES: Record<GeneratedDocumentStatus, string> = {
-  draft: 'bg-slate-100 text-slate-700',
-  generated: 'bg-emerald-100 text-emerald-800',
-  sent: 'bg-sky-100 text-sky-800',
-  void: 'bg-red-100 text-red-700',
-}
+import type { GeneratedDocument } from '../../types/generatedDocument'
 
 function formatDate(iso: string): string {
   const date = new Date(iso)
@@ -119,7 +107,12 @@ export function DocumentsIndexPage() {
                   {documents.map((document) => (
                     <tr key={document.id} className="hover:bg-slate-50">
                       <td className="px-4 py-3 font-medium text-slate-900">
-                        {document.document_number}
+                        <Link
+                          to={`/documents/${document.id}`}
+                          className="hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-500"
+                        >
+                          {document.document_number}
+                        </Link>
                       </td>
                       <td className="px-4 py-3 text-slate-600">
                         {document.document_type_code || document.document_type}
@@ -128,12 +121,7 @@ export function DocumentsIndexPage() {
                         {document.client_id ? `Client #${document.client_id}` : '—'}
                       </td>
                       <td className="px-4 py-3">
-                        <span
-                          data-testid="document-status"
-                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_CLASSES[document.status]}`}
-                        >
-                          {STATUS_LABELS[document.status]}
-                        </span>
+                        <DocumentStatusBadge status={document.status} />
                       </td>
                       <td className="px-4 py-3 text-slate-600">
                         {formatDate(document.created_at)}

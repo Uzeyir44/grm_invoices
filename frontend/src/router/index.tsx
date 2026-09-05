@@ -9,6 +9,7 @@ import { ClientEditPage } from '../pages/clients/ClientEditPage'
 import { ClientsIndexPage } from '../pages/clients/ClientsIndexPage'
 import { DashboardIndexPage } from '../pages/dashboard/DashboardIndexPage'
 import { DocumentCreatePage } from '../pages/documents/DocumentCreatePage'
+import { DocumentDetailPage } from '../pages/documents/DocumentDetailPage'
 import { DocumentsIndexPage } from '../pages/documents/DocumentsIndexPage'
 import { NotFoundPage } from '../pages/NotFoundPage'
 import { TemplateCreatePage } from '../pages/templates/TemplateCreatePage'
@@ -41,6 +42,7 @@ export function AppRouter() {
           <Route path="templates/:templateId" element={<TemplateDetailPage />} />
           <Route path="documents" element={<DocumentsIndexPage />} />
           <Route path="documents/new" element={<DocumentCreatePage />} />
+          <Route path="documents/:documentId" element={<DocumentDetailPage />} />
         </Route>
       </Route>
       <Route path="login" element={<AuthLayout />}>
