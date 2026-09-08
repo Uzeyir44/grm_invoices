@@ -15,6 +15,13 @@
  * * `PATCH /api/clients/:id/addresses/:aid/`   → `ClientAddress` (200, partial)
  * * `DELETE /api/clients/:id/addresses/:aid/`  → 204 (physical child delete)
  *
+ * Nested contacts (`ClientContactSerializer`, tenant- and parent-scoped):
+ * * `GET /api/clients/:id/contacts/`           → array of `ClientContact`
+ *                                                  (plain array, no pagination)
+ * * `POST /api/clients/:id/contacts/`          → `ClientContact` (201)
+ * * `PATCH /api/clients/:id/contacts/:cid/`    → `ClientContact` (200, partial)
+ * * `DELETE /api/clients/:id/contacts/:cid/`   → 204 (physical child delete)
+ *
  * The list response carries no pagination metadata: the backend returns the
  * caller's company-scoped clients as a plain array.
  */
@@ -138,6 +145,25 @@ export interface ClientAddressInput {
 
 /** Partial update accepted by `PATCH /api/clients/:id/addresses/:aid/`. */
 export type ClientAddressUpdateInput = Partial<ClientAddressInput>
+
+/**
+ * Contact inputs accepted by the nested contact serializer
+ * (`ClientContactSerializer`). Writable fields only (`id` is read-only).
+ * `full_name` is required; `position`/`phone`/`email` are nullable optionals
+ * (`email` is validated as an email address); `is_primary` defaults to false
+ * and the backend allows only one primary contact per client. No reference
+ * data is involved — unlike addresses, contacts have no catalog FK.
+ */
+export interface ClientContactInput {
+  full_name: string
+  position?: string | null
+  phone?: string | null
+  email?: string | null
+  is_primary?: boolean
+}
+
+/** Partial update accepted by `PATCH /api/clients/:id/contacts/:cid/`. */
+export type ClientContactUpdateInput = Partial<ClientContactInput>
 
 /** Backend-supported list query parameters (`GET /api/clients/`). */
 export interface ClientsListParams {

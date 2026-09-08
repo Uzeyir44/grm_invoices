@@ -8,6 +8,7 @@ import { PageContainer } from '../../components/ui/PageContainer'
 import { ApiError, HTTP_STATUS } from '../../types/api'
 import type { ClientDetail } from '../../types/client'
 import { ClientAddressesSection } from './ClientAddressesSection'
+import { ClientContactsSection } from './ClientContactsSection'
 
 type State =
   | { status: 'loading' }
@@ -26,10 +27,10 @@ function formatDate(iso: string): string {
  * Client detail (`GET /api/clients/:id/`). The backend intentionally returns
  * 404 for both nonexistent and cross-tenant clients, so both cases render the
  * same safe "not found" state. Deleting is a soft-delete backed by the real
- * `DELETE` endpoint and requires an explicit confirmation step. Addresses are
- * managed through the tenant-scoped nested endpoints in
- * {@link ClientAddressesSection}; contacts and bank accounts remain
- * read-only nested displays.
+ * `DELETE` endpoint and requires an explicit confirmation step. Addresses and
+ * contacts are managed through the tenant-scoped nested endpoints in
+ * {@link ClientAddressesSection} and {@link ClientContactsSection};
+ * bank accounts remain a read-only nested display.
  */
 export function ClientDetailPage() {
   const { clientId } = useParams()
@@ -244,23 +245,7 @@ export function ClientDetailPage() {
           )}
         </dl>
 
-        <section aria-label="Contacts">
-          <h2 className="mb-1 text-sm font-semibold text-slate-700">Contacts</h2>
-          {client.contacts.length === 0 ? (
-            <p className="text-sm text-slate-500">No contacts.</p>
-          ) : (
-            <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white text-sm">
-              {client.contacts.map((contact) => (
-                <li key={contact.id} className="px-4 py-2 text-slate-700">
-                  <span className="font-medium text-slate-900">{contact.full_name}</span>
-                  {contact.position ? ` — ${contact.position}` : ''}
-                  {contact.email ? ` · ${contact.email}` : ''}
-                  {contact.phone ? ` · ${contact.phone}` : ''}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        <ClientContactsSection clientId={client.id} />
 
         <ClientAddressesSection clientId={client.id} />
 

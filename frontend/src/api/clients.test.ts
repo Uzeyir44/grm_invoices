@@ -2,13 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createClient,
   createClientAddress,
+  createClientContact,
   deleteClient,
   deleteClientAddress,
+  deleteClientContact,
   getClient,
   listClientAddresses,
+  listClientContacts,
   listClients,
   updateClient,
   updateClientAddress,
+  updateClientContact,
 } from './clients'
 import { clientDetail, clientSummaries, jsonResponse } from '../test/clientFixtures'
 import { ApiError, HTTP_STATUS } from '../types/api'
@@ -206,6 +210,106 @@ describe('clients API', () => {
     fetchMock.mockResolvedValue(jsonResponse(404, { detail: 'Not found.' }))
 
     await expect(deleteClientAddress(1, 999)).rejects.toMatchObject({
+      status: HTTP_STATUS.NOT_FOUND,
+    })
+  })
+
+  it('lists client contacts from the nested collection endpoint', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, clientDetail.contacts))
+    setAccessToken('token-1')
+
+    const result = await listClientContacts(1)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/clients/1/contacts/')
+    expect(init.method).toBe('GET')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-1')
+    expect(result).toEqual(clientDetail.contacts)
+  })
+
+  it('creates a contact with the nested serializer body', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(201, clientDetail.contacts[0]))
+
+    const body = {
+      full_name: 'Alice Manager',
+      position: 'CEO',
+      phone: '+994000000000',
+      email: 'alice@acme.az',
+      is_primary: true,
+    }
+    const result = await createClientContact(1, body)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/clients/1/contacts/')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual(body)
+    expect(result).toEqual(clientDetail.contacts[0])
+  })
+
+  it('never sends a company_id in the contact payload', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(201, clientDetail.contacts[0]))
+
+    await createClientContact(1, { full_name: 'Alice Manager' })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>
+    expect(body.company_id).toBeUndefined()
+    expect(body.company).toBeUndefined()
+    expect(body.client).toBeUndefined()
+  })
+
+  it('updates a contact with PATCH and a partial body', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, clientDetail.contacts[0]))
+
+    const result = await updateClientContact(1, 7, { position: 'CTO' })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/clients/1/contacts/7/')
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(String(init.body))).toEqual({ position: 'CTO' })
+    expect(result).toEqual(clientDetail.contacts[0])
+  })
+
+  it('deletes a contact via DELETE and resolves on 204', async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }))
+
+    await expect(deleteClientContact(1, 7)).resolves.toBeUndefined()
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/clients/1/contacts/7/')
+    expect(init.method).toBe('DELETE')
+  })
+
+  it('preserves backend contact field validation errors', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(400, { is_primary: ['This client already has a primary contact.'] }),
+    )
+
+    const error = await createClientContact(1, {
+      full_name: 'Bob Smith',
+      is_primary: true,
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(HTTP_STATUS.BAD_REQUEST)
+    expect((error as ApiError).fieldErrors.is_primary).toEqual([
+      'This client already has a primary contact.',
+    ])
+  })
+
+  it('converts a contact 403 into a typed ApiError', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(403, { detail: 'No permission.' }))
+
+    await expect(listClientContacts(1)).rejects.toMatchObject({
+      status: HTTP_STATUS.FORBIDDEN,
+    })
+    await expect(listClientContacts(1)).rejects.toBeInstanceOf(ApiError)
+  })
+
+  it('converts a contact 404 into a typed ApiError', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(404, { detail: 'Not found.' }))
+
+    await expect(deleteClientContact(1, 999)).rejects.toMatchObject({
       status: HTTP_STATUS.NOT_FOUND,
     })
   })

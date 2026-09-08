@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ClientDetailPage } from './ClientDetailPage'
 import { clientDetail, jsonResponse } from '../../test/clientFixtures'
-import type { ClientAddress } from '../../types/client'
+import type { ClientAddress, ClientContact } from '../../types/client'
 
 const addressTypesFixture = [
   { id: 1, code: 'legal' },
@@ -34,6 +34,7 @@ function stubBackend(overrides: {
   detailStatus?: number
   detailBody?: unknown
   addressesBody?: unknown
+  contactsBody?: unknown
   typesBody?: unknown
   typesStatus?: number
   onWrite?: (url: string, init: RequestInit) => Response | undefined
@@ -50,6 +51,16 @@ function stubBackend(overrides: {
       if (method === 'GET') {
         return Promise.resolve(
           jsonResponse(200, overrides.addressesBody ?? clientDetail.addresses),
+        )
+      }
+      const handled = overrides.onWrite?.(url, init as RequestInit)
+      if (handled) return Promise.resolve(handled)
+      return Promise.resolve(jsonResponse(500, {}))
+    }
+    if (url === '/api/clients/1/contacts/') {
+      if (method === 'GET') {
+        return Promise.resolve(
+          jsonResponse(200, overrides.contactsBody ?? clientDetail.contacts),
         )
       }
       const handled = overrides.onWrite?.(url, init as RequestInit)
@@ -96,9 +107,9 @@ describe('ClientDetailPage', () => {
     expect(screen.getByText('active')).toBeInTheDocument()
     expect(screen.getByText('legal_entity')).toBeInTheDocument()
     expect(screen.getByText('1234567890')).toBeInTheDocument()
-    expect(screen.getByText('Alice Manager')).toBeInTheDocument()
-    // The addresses section mounts after the client detail loads, so wait
-    // for its rows instead of asserting synchronously.
+    // Both nested sections mount after the client detail loads, so wait for
+    // their rows instead of asserting synchronously.
+    expect(await screen.findByText('Alice Manager')).toBeInTheDocument()
     expect(await screen.findByText(/Main St 1/)).toBeInTheDocument()
     expect(screen.getByText(/Test Bank/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /edit/i })).toHaveAttribute(
@@ -553,5 +564,368 @@ describe('ClientDetailPage addresses', () => {
     await user.click(screen.getByRole('button', { name: /^retry$/i }))
     expect(await screen.findByRole('option', { name: 'legal' })).toBeInTheDocument()
     expect(typesCalls).toBe(2)
+  })
+})
+
+describe('ClientDetailPage contacts', () => {
+  const user = userEvent.setup()
+
+  beforeEach(() => {
+    localStorage.clear()
+    fetchMock.mockReset()
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders existing contacts with their backend fields', async () => {
+    stubBackend()
+    renderDetail()
+
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText('Alice Manager')
+    const section = screen.getByRole('region', { name: 'Contacts' })
+    expect(within(section).getByText('Alice Manager')).toBeInTheDocument()
+    expect(within(section).getByText(/CEO/)).toBeInTheDocument()
+    expect(within(section).getByText(/alice@acme.az/)).toBeInTheDocument()
+    expect(within(section).getByText(/\+994000000000/)).toBeInTheDocument()
+    expect(within(section).getByText(/primary/)).toBeInTheDocument()
+    expect(within(section).getByRole('button', { name: /^edit$/i })).toBeInTheDocument()
+    expect(within(section).getByRole('button', { name: /^delete$/i })).toBeInTheDocument()
+  })
+
+  it('shows the section loading state once the client has loaded', async () => {
+    let resolveContacts!: (response: Response) => void
+    const contactsPromise = new Promise<Response>((resolve) => {
+      resolveContacts = resolve
+    })
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/clients/1/contacts/') {
+        return contactsPromise
+      }
+      if (url === '/api/clients/1/addresses/') {
+        return Promise.resolve(jsonResponse(200, clientDetail.addresses))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+
+    expect(screen.getByText('Loading contacts…')).toBeInTheDocument()
+    expect(screen.queryByText('Alice Manager')).not.toBeInTheDocument()
+
+    resolveContacts(jsonResponse(200, clientDetail.contacts))
+    expect(await screen.findByText('Alice Manager')).toBeInTheDocument()
+  })
+
+  it('shows an empty state with an add action when the client has no contacts', async () => {
+    stubBackend({ contactsBody: [] })
+    renderDetail()
+
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    expect(await screen.findByText('No contacts found.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^add contact$/i })).toBeInTheDocument()
+  })
+
+  it('shows an error state with retry when loading contacts fails', async () => {
+    let contactCalls = 0
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/clients/1/contacts/') {
+        contactCalls += 1
+        if (contactCalls === 1) return Promise.resolve(jsonResponse(500, {}))
+        return Promise.resolve(jsonResponse(200, clientDetail.contacts))
+      }
+      if (url === '/api/clients/1/addresses/') {
+        return Promise.resolve(jsonResponse(200, clientDetail.addresses))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+
+    expect(await screen.findByText("Couldn't load contacts.")).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /retry/i }))
+    expect(await screen.findByText('Alice Manager')).toBeInTheDocument()
+    expect(contactCalls).toBe(2)
+  })
+
+  it('shows an access-denied state when the contact collection returns 403', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/clients/1/contacts/') {
+        return Promise.resolve(jsonResponse(403, { detail: 'No permission.' }))
+      }
+      if (url === '/api/clients/1/addresses/') {
+        return Promise.resolve(jsonResponse(200, clientDetail.addresses))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+
+    expect(
+      await screen.findByText('You do not have permission to view contacts.'),
+    ).toBeInTheDocument()
+  })
+
+  it('creates a contact with the correct payload and refreshes the list', async () => {
+    let rows: ClientContact[] = [...clientDetail.contacts]
+    const posts: Array<{ url: string; body: unknown }> = []
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/clients/1/addresses/') {
+        return Promise.resolve(jsonResponse(200, clientDetail.addresses))
+      }
+      if (url === '/api/clients/1/contacts/' && method === 'GET') {
+        return Promise.resolve(jsonResponse(200, rows))
+      }
+      if (url === '/api/clients/1/contacts/' && method === 'POST') {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        posts.push({ url, body })
+        const created: ClientContact = {
+          id: 2,
+          full_name: body.full_name as string,
+          position: (body.position as string | null) ?? null,
+          phone: (body.phone as string | null) ?? null,
+          email: (body.email as string | null) ?? null,
+          is_primary: (body.is_primary as boolean) ?? false,
+        }
+        rows = [...rows, created]
+        return Promise.resolve(jsonResponse(201, created))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText('Alice Manager')
+
+    await user.click(screen.getByRole('button', { name: /^add contact$/i }))
+    const form = await screen.findByRole('form', { name: 'Add contact' })
+    expect(
+      within(form).getByLabelText(/full name/i),
+    ).toBeInTheDocument()
+
+    await user.type(within(form).getByLabelText(/full name/i), 'Bob Smith')
+    await user.type(within(form).getByLabelText(/^position$/i), 'Driver')
+    await user.type(within(form).getByLabelText(/^phone$/i), '+994551234567')
+    await user.type(within(form).getByLabelText(/^email$/i), 'bob@example.com')
+
+    await user.click(within(form).getByRole('button', { name: /^add contact$/i }))
+
+    expect(await screen.findByText('Contact added.')).toBeInTheDocument()
+    expect(await screen.findByText('Bob Smith')).toBeInTheDocument()
+    expect(posts).toHaveLength(1)
+    expect(posts[0].url).toBe('/api/clients/1/contacts/')
+    expect(posts[0].body).toEqual({
+      full_name: 'Bob Smith',
+      position: 'Driver',
+      phone: '+994551234567',
+      email: 'bob@example.com',
+      is_primary: false,
+    })
+    // No company scoping parameter is ever sent.
+    expect(JSON.stringify(posts[0].body)).not.toContain('company_id')
+  })
+
+  it('prevents duplicate submissions while creating', async () => {
+    let resolvePost!: (response: Response) => void
+    const postPromise = new Promise<Response>((resolve) => {
+      resolvePost = resolve
+    })
+    let postCount = 0
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/clients/1/addresses/') {
+        return Promise.resolve(jsonResponse(200, clientDetail.addresses))
+      }
+      if (url === '/api/clients/1/contacts/' && method === 'GET') {
+        return Promise.resolve(jsonResponse(200, clientDetail.contacts))
+      }
+      if (url === '/api/clients/1/contacts/' && method === 'POST') {
+        postCount += 1
+        return postPromise
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText('Alice Manager')
+
+    await user.click(screen.getByRole('button', { name: /^add contact$/i }))
+    const form = await screen.findByRole('form', { name: 'Add contact' })
+    await user.type(within(form).getByLabelText(/full name/i), 'Bob Smith')
+
+    const submit = within(form).getByRole('button', { name: /^add contact$/i })
+    await user.click(submit)
+    await user.click(submit)
+
+    resolvePost(jsonResponse(201, { ...clientDetail.contacts[0], id: 2 }))
+    expect(await screen.findByText('Contact added.')).toBeInTheDocument()
+    expect(postCount).toBe(1)
+  })
+
+  it('validates required fields locally without calling the API', async () => {
+    stubBackend()
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText('Alice Manager')
+
+    await user.click(screen.getByRole('button', { name: /^add contact$/i }))
+    const form = await screen.findByRole('form', { name: 'Add contact' })
+
+    const callsBefore = fetchMock.mock.calls.length
+    await user.click(within(form).getByRole('button', { name: /^add contact$/i }))
+
+    expect(await screen.findByText('Full name is required.')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.length).toBe(callsBefore)
+  })
+
+  it('surfaces backend field validation errors inline', async () => {
+    stubBackend({
+      onWrite: (url, init) => {
+        if (url === '/api/clients/1/contacts/' && init.method === 'POST') {
+          return jsonResponse(400, {
+            is_primary: ['This client already has a primary contact.'],
+          })
+        }
+        return undefined
+      },
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText('Alice Manager')
+
+    await user.click(screen.getByRole('button', { name: /^add contact$/i }))
+    const form = await screen.findByRole('form', { name: 'Add contact' })
+    await user.type(within(form).getByLabelText(/full name/i), 'Bob Smith')
+    await user.click(within(form).getByLabelText(/primary contact/i))
+    await user.click(within(form).getByRole('button', { name: /^add contact$/i }))
+
+    expect(
+      await screen.findByText('This client already has a primary contact.'),
+    ).toBeInTheDocument()
+    // The entered values are preserved.
+    expect(screen.getByLabelText(/full name/i)).toHaveValue('Bob Smith')
+  })
+
+  it('edits a contact with pre-filled values and PATCHes the row', async () => {
+    const patches: Array<{ url: string; body: unknown }> = []
+    let rows: ClientContact[] = [...clientDetail.contacts]
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/clients/1/addresses/') {
+        return Promise.resolve(jsonResponse(200, clientDetail.addresses))
+      }
+      if (url === '/api/clients/1/contacts/' && method === 'GET') {
+        return Promise.resolve(jsonResponse(200, rows))
+      }
+      if (url === '/api/clients/1/contacts/1/' && method === 'PATCH') {
+        const body = JSON.parse(String(init?.body)) as Partial<ClientContact>
+        patches.push({ url, body })
+        rows = rows.map((row) => ({ ...row, ...body }))
+        return Promise.resolve(jsonResponse(200, rows[0]))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText('Alice Manager')
+
+    const section = screen.getByRole('region', { name: 'Contacts' })
+    await user.click(within(section).getByRole('button', { name: /^edit$/i }))
+    const form = await screen.findByRole('form', { name: 'Edit contact' })
+    // Existing values are populated.
+    expect(within(form).getByLabelText(/full name/i)).toHaveValue('Alice Manager')
+    expect(within(form).getByLabelText(/^position$/i)).toHaveValue('CEO')
+    expect(within(form).getByLabelText(/^email$/i)).toHaveValue('alice@acme.az')
+    expect(within(form).getByLabelText(/primary contact/i)).toBeChecked()
+
+    await user.clear(within(form).getByLabelText(/^position$/i))
+    await user.type(within(form).getByLabelText(/^position$/i), 'CTO')
+    await user.click(within(form).getByRole('button', { name: /save changes/i }))
+
+    expect(await screen.findByText('Contact updated.')).toBeInTheDocument()
+    expect(await screen.findByText(/CTO/)).toBeInTheDocument()
+    expect(patches).toHaveLength(1)
+    expect(patches[0].url).toBe('/api/clients/1/contacts/1/')
+    expect(patches[0].body).toMatchObject({ position: 'CTO' })
+  })
+
+  it('deletes a contact only after confirmation and refreshes the list', async () => {
+    let rows: ClientContact[] = [...clientDetail.contacts]
+    const deletes: string[] = []
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/clients/1/addresses/') {
+        return Promise.resolve(jsonResponse(200, clientDetail.addresses))
+      }
+      if (url === '/api/clients/1/contacts/' && method === 'GET') {
+        return Promise.resolve(jsonResponse(200, rows))
+      }
+      if (url === '/api/clients/1/contacts/1/' && method === 'DELETE') {
+        deletes.push(url)
+        rows = []
+        return Promise.resolve(new Response(null, { status: 204 }))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText('Alice Manager')
+
+    const section = screen.getByRole('region', { name: 'Contacts' })
+    await user.click(within(section).getByRole('button', { name: /^delete$/i }))
+    expect(screen.getByText('Delete this contact?')).toBeInTheDocument()
+    expect(deletes).toHaveLength(0)
+
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }))
+    expect(deletes).toHaveLength(0)
+    expect(screen.queryByText('Delete this contact?')).not.toBeInTheDocument()
+
+    await user.click(within(section).getByRole('button', { name: /^delete$/i }))
+    await user.click(screen.getByRole('button', { name: /yes, delete/i }))
+
+    expect(await screen.findByText('Contact deleted.')).toBeInTheDocument()
+    expect(await screen.findByText('No contacts found.')).toBeInTheDocument()
+    expect(deletes).toEqual(['/api/clients/1/contacts/1/'])
+  })
+
+  it('shows a safe error when deleting fails', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/clients/1/addresses/') {
+        return Promise.resolve(jsonResponse(200, clientDetail.addresses))
+      }
+      if (url === '/api/clients/1/contacts/' && method === 'GET') {
+        return Promise.resolve(jsonResponse(200, clientDetail.contacts))
+      }
+      if (url === '/api/clients/1/contacts/1/' && method === 'DELETE') {
+        return Promise.resolve(jsonResponse(403, { detail: 'No permission.' }))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText('Alice Manager')
+
+    const section = screen.getByRole('region', { name: 'Contacts' })
+    await user.click(within(section).getByRole('button', { name: /^delete$/i }))
+    await user.click(screen.getByRole('button', { name: /yes, delete/i }))
+
+    expect(
+      await screen.findByText('You do not have permission to manage contacts.'),
+    ).toBeInTheDocument()
+    // The row is still there — nothing was deleted.
+    expect(screen.getByText('Alice Manager')).toBeInTheDocument()
   })
 })

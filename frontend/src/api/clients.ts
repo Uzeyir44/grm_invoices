@@ -3,6 +3,9 @@ import type {
   ClientAddress,
   ClientAddressInput,
   ClientAddressUpdateInput,
+  ClientContact,
+  ClientContactInput,
+  ClientContactUpdateInput,
   ClientCreateInput,
   ClientDetail,
   ClientSummary,
@@ -29,6 +32,15 @@ import type {
  *   * `PATCH  /clients/:id/addresses/:aid/`      → partial update →
  *                               `ClientAddress` (200, needs `clients.update`)
  *   * `DELETE /clients/:id/addresses/:aid/`      → physical child delete →
+ *                               204 (needs `clients.update`)
+ *   * `GET    /clients/:id/contacts/`             → array of `ClientContact`
+ *                               (plain array, no pagination)
+ *   * `POST   /clients/:id/contacts/`             → create → `ClientContact`
+ *                               (201). GET needs `clients.read`; POST needs
+ *                               `clients.update`.
+ *   * `PATCH  /clients/:id/contacts/:cid/`       → partial update →
+ *                               `ClientContact` (200, needs `clients.update`)
+ *   * `DELETE /clients/:id/contacts/:cid/`       → physical child delete →
  *                               204 (needs `clients.update`)
  *
  * The company is always the authenticated user's company; no `company_id` is
@@ -91,4 +103,31 @@ export function updateClientAddress(
 /** Physically delete an address (`DELETE /clients/:id/addresses/:aid/` → 204). */
 export function deleteClientAddress(clientId: number, addressId: number): Promise<void> {
   return apiClient.delete<void>(`/clients/${clientId}/addresses/${addressId}/`)
+}
+
+/** List a client's contacts (`GET /clients/:id/contacts/`, plain array). */
+export function listClientContacts(clientId: number): Promise<ClientContact[]> {
+  return apiClient.get<ClientContact[]>(`/clients/${clientId}/contacts/`)
+}
+
+/** Create a contact for a client (`POST /clients/:id/contacts/` → 201). */
+export function createClientContact(
+  clientId: number,
+  input: ClientContactInput,
+): Promise<ClientContact> {
+  return apiClient.post<ClientContact>(`/clients/${clientId}/contacts/`, input)
+}
+
+/** Partially update a contact (`PATCH /clients/:id/contacts/:cid/`). */
+export function updateClientContact(
+  clientId: number,
+  contactId: number,
+  input: ClientContactUpdateInput,
+): Promise<ClientContact> {
+  return apiClient.patch<ClientContact>(`/clients/${clientId}/contacts/${contactId}/`, input)
+}
+
+/** Physically delete a contact (`DELETE /clients/:id/contacts/:cid/` → 204). */
+export function deleteClientContact(clientId: number, contactId: number): Promise<void> {
+  return apiClient.delete<void>(`/clients/${clientId}/contacts/${contactId}/`)
 }
