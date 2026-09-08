@@ -346,9 +346,10 @@ authenticated user's company (the frontend never sends `company_id`).
   choices), integer `entity_id` / `user_id`, and the `created_after`
   (`created_at >=`) / `created_before` (`created_at <=`) timestamp bounds
   (`datetime-local` inputs). There is **no** backend free-text search and no
-  ordering parameter, so none is shown. Invalid integers/datetimes, or
-  `created_after` later than `created_before`, are a backend 400 surfaced
-  through the normal error state.
+  ordering parameter, so none is shown. Non-numeric IDs are omitted from the
+  request instead of being sent; backend rejections that remain reachable
+  (e.g. `created_after` later than `created_before` → 400) surface through
+  the normal error state.
 - Filter typing is debounced (250 ms, same as the client search) so typing
   does not fire a request per keystroke; one filtered request fires per
   change set. Filters live in the URL (`?action=&entity_type=&entity_id=&
