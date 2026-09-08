@@ -4,13 +4,17 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ClientDetailPage } from './ClientDetailPage'
 import { clientDetail, jsonResponse } from '../../test/clientFixtures'
-import type { ClientAddress, ClientContact } from '../../types/client'
+import type { ClientAddress, ClientBankAccount, ClientContact } from '../../types/client'
 
 const addressTypesFixture = [
   { id: 1, code: 'legal' },
   { id: 2, code: 'business' },
   { id: 3, code: 'residential' },
 ]
+
+const banksFixture = [{ id: 1, name: 'Test Bank', swift_code: 'TESTAZ22', is_active: true }]
+
+const currenciesFixture = [{ id: 1, code: 'AZN', name: 'Manat', minor_unit: 2 }]
 
 function renderDetail() {
   return render(
@@ -35,8 +39,13 @@ function stubBackend(overrides: {
   detailBody?: unknown
   addressesBody?: unknown
   contactsBody?: unknown
+  accountsBody?: unknown
   typesBody?: unknown
   typesStatus?: number
+  banksBody?: unknown
+  banksStatus?: number
+  currenciesBody?: unknown
+  currenciesStatus?: number
   onWrite?: (url: string, init: RequestInit) => Response | undefined
 } = {}) {
   fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -63,6 +72,34 @@ function stubBackend(overrides: {
           jsonResponse(200, overrides.contactsBody ?? clientDetail.contacts),
         )
       }
+      const handled = overrides.onWrite?.(url, init as RequestInit)
+      if (handled) return Promise.resolve(handled)
+      return Promise.resolve(jsonResponse(500, {}))
+    }
+    if (url === '/api/reference-data/banks/') {
+      return Promise.resolve(
+        jsonResponse(overrides.banksStatus ?? 200, overrides.banksBody ?? banksFixture),
+      )
+    }
+    if (url === '/api/reference-data/currencies/') {
+      return Promise.resolve(
+        jsonResponse(
+          overrides.currenciesStatus ?? 200,
+          overrides.currenciesBody ?? currenciesFixture,
+        ),
+      )
+    }
+    if (url === '/api/clients/1/bank-accounts/') {
+      if (method === 'GET') {
+        return Promise.resolve(
+          jsonResponse(200, overrides.accountsBody ?? clientDetail.bank_accounts),
+        )
+      }
+      const handled = overrides.onWrite?.(url, init as RequestInit)
+      if (handled) return Promise.resolve(handled)
+      return Promise.resolve(jsonResponse(500, {}))
+    }
+    if (url.startsWith('/api/clients/1/bank-accounts/')) {
       const handled = overrides.onWrite?.(url, init as RequestInit)
       if (handled) return Promise.resolve(handled)
       return Promise.resolve(jsonResponse(500, {}))
@@ -111,7 +148,7 @@ describe('ClientDetailPage', () => {
     // their rows instead of asserting synchronously.
     expect(await screen.findByText('Alice Manager')).toBeInTheDocument()
     expect(await screen.findByText(/Main St 1/)).toBeInTheDocument()
-    expect(screen.getByText(/Test Bank/)).toBeInTheDocument()
+    expect(await screen.findByText(/Test Bank/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /edit/i })).toHaveAttribute(
       'href',
       '/clients/1/edit',
@@ -564,6 +601,437 @@ describe('ClientDetailPage addresses', () => {
     await user.click(screen.getByRole('button', { name: /^retry$/i }))
     expect(await screen.findByRole('option', { name: 'legal' })).toBeInTheDocument()
     expect(typesCalls).toBe(2)
+  })
+})
+
+describe('ClientDetailPage bank accounts', () => {
+  const user = userEvent.setup()
+
+  beforeEach(() => {
+    localStorage.clear()
+    fetchMock.mockReset()
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders existing bank accounts with their backend fields', async () => {
+    stubBackend()
+    renderDetail()
+
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText(/AZ00TEST0000000000/)
+    const section = screen.getByRole('region', { name: 'Bank accounts' })
+    expect(within(section).getByText('Test Bank')).toBeInTheDocument()
+    expect(within(section).getByText(/AZ00TEST0000000000/)).toBeInTheDocument()
+    expect(within(section).getByText(/AZN/)).toBeInTheDocument()
+    expect(within(section).getByText(/default/)).toBeInTheDocument()
+    expect(within(section).getByRole('button', { name: /^edit$/i })).toBeInTheDocument()
+    expect(within(section).getByRole('button', { name: /^delete$/i })).toBeInTheDocument()
+  })
+
+  it('shows the section loading state once the client has loaded', async () => {
+    let resolveAccounts!: (response: Response) => void
+    const accountsPromise = new Promise<Response>((resolve) => {
+      resolveAccounts = resolve
+    })
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/clients/1/bank-accounts/') {
+        return accountsPromise
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+
+    expect(screen.getByText('Loading bank accounts…')).toBeInTheDocument()
+    expect(screen.queryByText(/AZ00TEST0000000000/)).not.toBeInTheDocument()
+
+    // The other nested sections receive the wrong shape here and render
+    // nothing; only the bank accounts resolution is under test.
+    resolveAccounts(jsonResponse(200, clientDetail.bank_accounts))
+    expect(await screen.findByText(/AZ00TEST0000000000/)).toBeInTheDocument()
+  })
+
+  it('shows an empty state with an add action when the client has no bank accounts', async () => {
+    stubBackend({ accountsBody: [] })
+    renderDetail()
+
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    expect(await screen.findByText('No bank accounts found.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^add bank account$/i })).toBeInTheDocument()
+  })
+
+  it('shows an error state with retry when loading bank accounts fails', async () => {
+    let accountCalls = 0
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/clients/1/bank-accounts/') {
+        accountCalls += 1
+        if (accountCalls === 1) return Promise.resolve(jsonResponse(500, {}))
+        return Promise.resolve(jsonResponse(200, clientDetail.bank_accounts))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+
+    expect(await screen.findByText("Couldn't load bank accounts.")).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /retry/i }))
+    expect(await screen.findByText(/AZ00TEST0000000000/)).toBeInTheDocument()
+    expect(accountCalls).toBe(2)
+  })
+
+  it('shows an access-denied state when the bank account collection returns 403', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/clients/1/bank-accounts/') {
+        return Promise.resolve(jsonResponse(403, { detail: 'No permission.' }))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+
+    expect(
+      await screen.findByText('You do not have permission to view bank accounts.'),
+    ).toBeInTheDocument()
+  })
+
+  it('creates a bank account with the correct payload and refreshes the list', async () => {
+    let rows: ClientBankAccount[] = [...clientDetail.bank_accounts]
+    const posts: Array<{ url: string; body: unknown }> = []
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/reference-data/banks/') {
+        return Promise.resolve(jsonResponse(200, banksFixture))
+      }
+      if (url === '/api/reference-data/currencies/') {
+        return Promise.resolve(jsonResponse(200, currenciesFixture))
+      }
+      if (url === '/api/clients/1/bank-accounts/' && method === 'GET') {
+        return Promise.resolve(jsonResponse(200, rows))
+      }
+      if (url === '/api/clients/1/bank-accounts/' && method === 'POST') {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        posts.push({ url, body })
+        const created: ClientBankAccount = {
+          id: 2,
+          bank: (body.bank as number | null) ?? null,
+          bank_name: 'Test Bank',
+          currency: body.currency as number,
+          currency_code: 'AZN',
+          iban: body.iban as string,
+          swift_bic: (body.swift_bic as string | null) ?? null,
+          is_default: (body.is_default as boolean) ?? false,
+        }
+        rows = [...rows, created]
+        return Promise.resolve(jsonResponse(201, created))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText(/AZ00TEST0000000000/)
+
+    await user.click(screen.getByRole('button', { name: /^add bank account$/i }))
+    const form = await screen.findByRole('form', { name: 'Add bank account' })
+    await screen.findByRole('option', { name: 'Test Bank' })
+    await screen.findByRole('option', { name: 'AZN' })
+
+    await user.selectOptions(within(form).getByLabelText(/^bank$/i), '1')
+    await user.selectOptions(within(form).getByLabelText(/currency/i), '1')
+    await user.type(within(form).getByLabelText(/iban/i), 'AZ99NEW0000000001')
+    await user.type(within(form).getByLabelText(/swift/i), 'NEWAAZ22')
+
+    await user.click(within(form).getByRole('button', { name: /^add bank account$/i }))
+
+    expect(await screen.findByText('Bank account added.')).toBeInTheDocument()
+    expect(await screen.findByText(/AZ99NEW0000000001/)).toBeInTheDocument()
+    expect(posts).toHaveLength(1)
+    expect(posts[0].url).toBe('/api/clients/1/bank-accounts/')
+    expect(posts[0].body).toEqual({
+      bank: 1,
+      currency: 1,
+      iban: 'AZ99NEW0000000001',
+      swift_bic: 'NEWAAZ22',
+      is_default: false,
+    })
+    // No company scoping parameter is ever sent.
+    expect(JSON.stringify(posts[0].body)).not.toContain('company_id')
+  })
+
+  it('sends a null bank when no bank is selected', async () => {
+    const posts: unknown[] = []
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/reference-data/banks/') {
+        return Promise.resolve(jsonResponse(200, banksFixture))
+      }
+      if (url === '/api/reference-data/currencies/') {
+        return Promise.resolve(jsonResponse(200, currenciesFixture))
+      }
+      if (url === '/api/clients/1/bank-accounts/' && method === 'GET') {
+        return Promise.resolve(jsonResponse(200, clientDetail.bank_accounts))
+      }
+      if (url === '/api/clients/1/bank-accounts/' && method === 'POST') {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        posts.push(body)
+        return Promise.resolve(jsonResponse(201, { ...clientDetail.bank_accounts[0], id: 2 }))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText(/AZ00TEST0000000000/)
+
+    await user.click(screen.getByRole('button', { name: /^add bank account$/i }))
+    const form = await screen.findByRole('form', { name: 'Add bank account' })
+    await screen.findByRole('option', { name: 'AZN' })
+
+    // Bank stays on "No bank"; only the required currency + IBAN are set.
+    await user.selectOptions(within(form).getByLabelText(/currency/i), '1')
+    await user.type(within(form).getByLabelText(/iban/i), 'AZ99NOBANK0000001')
+    await user.click(within(form).getByRole('button', { name: /^add bank account$/i }))
+
+    expect(await screen.findByText('Bank account added.')).toBeInTheDocument()
+    expect(posts).toHaveLength(1)
+    expect(posts[0]).toMatchObject({ bank: null, currency: 1 })
+  })
+
+  it('prevents duplicate submissions while creating', async () => {
+    let resolvePost!: (response: Response) => void
+    const postPromise = new Promise<Response>((resolve) => {
+      resolvePost = resolve
+    })
+    let postCount = 0
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/reference-data/banks/') {
+        return Promise.resolve(jsonResponse(200, banksFixture))
+      }
+      if (url === '/api/reference-data/currencies/') {
+        return Promise.resolve(jsonResponse(200, currenciesFixture))
+      }
+      if (url === '/api/clients/1/bank-accounts/' && method === 'GET') {
+        return Promise.resolve(jsonResponse(200, clientDetail.bank_accounts))
+      }
+      if (url === '/api/clients/1/bank-accounts/' && method === 'POST') {
+        postCount += 1
+        return postPromise
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText(/AZ00TEST0000000000/)
+
+    await user.click(screen.getByRole('button', { name: /^add bank account$/i }))
+    const form = await screen.findByRole('form', { name: 'Add bank account' })
+    await screen.findByRole('option', { name: 'AZN' })
+    await user.selectOptions(within(form).getByLabelText(/currency/i), '1')
+    await user.type(within(form).getByLabelText(/iban/i), 'AZ99NEW0000000001')
+
+    const submit = within(form).getByRole('button', { name: /^add bank account$/i })
+    await user.click(submit)
+    await user.click(submit)
+
+    resolvePost(jsonResponse(201, { ...clientDetail.bank_accounts[0], id: 2 }))
+    expect(await screen.findByText('Bank account added.')).toBeInTheDocument()
+    expect(postCount).toBe(1)
+  })
+
+  it('validates required fields locally without calling the API', async () => {
+    stubBackend()
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText(/AZ00TEST0000000000/)
+
+    await user.click(screen.getByRole('button', { name: /^add bank account$/i }))
+    const form = await screen.findByRole('form', { name: 'Add bank account' })
+
+    const callsBefore = fetchMock.mock.calls.length
+    await user.click(within(form).getByRole('button', { name: /^add bank account$/i }))
+
+    expect(await screen.findByText('Currency is required.')).toBeInTheDocument()
+    expect(screen.getByText('IBAN is required.')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.length).toBe(callsBefore)
+  })
+
+  it('surfaces backend field validation errors inline', async () => {
+    stubBackend({
+      onWrite: (url, init) => {
+        if (url === '/api/clients/1/bank-accounts/' && init.method === 'POST') {
+          return jsonResponse(400, {
+            iban: ['This IBAN is already in use for this client.'],
+          })
+        }
+        return undefined
+      },
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText(/AZ00TEST0000000000/)
+
+    await user.click(screen.getByRole('button', { name: /^add bank account$/i }))
+    const form = await screen.findByRole('form', { name: 'Add bank account' })
+    await screen.findByRole('option', { name: 'AZN' })
+    await user.selectOptions(within(form).getByLabelText(/currency/i), '1')
+    await user.type(within(form).getByLabelText(/iban/i), 'AZ00TEST0000000000')
+    await user.click(within(form).getByRole('button', { name: /^add bank account$/i }))
+
+    expect(
+      await screen.findByText('This IBAN is already in use for this client.'),
+    ).toBeInTheDocument()
+    // The entered values are preserved.
+    expect(screen.getByLabelText(/iban/i)).toHaveValue('AZ00TEST0000000000')
+  })
+
+  it('edits a bank account with pre-filled values and PATCHes the row', async () => {
+    const patches: Array<{ url: string; body: unknown }> = []
+    let rows: ClientBankAccount[] = [...clientDetail.bank_accounts]
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/reference-data/banks/') {
+        return Promise.resolve(jsonResponse(200, banksFixture))
+      }
+      if (url === '/api/reference-data/currencies/') {
+        return Promise.resolve(jsonResponse(200, currenciesFixture))
+      }
+      if (url === '/api/clients/1/bank-accounts/' && method === 'GET') {
+        return Promise.resolve(jsonResponse(200, rows))
+      }
+      if (url === '/api/clients/1/bank-accounts/1/' && method === 'PATCH') {
+        const body = JSON.parse(String(init?.body)) as Partial<ClientBankAccount>
+        patches.push({ url, body })
+        rows = rows.map((row) => ({ ...row, ...body }))
+        return Promise.resolve(jsonResponse(200, rows[0]))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText(/AZ00TEST0000000000/)
+
+    const section = screen.getByRole('region', { name: 'Bank accounts' })
+    await user.click(within(section).getByRole('button', { name: /^edit$/i }))
+    const form = await screen.findByRole('form', { name: 'Edit bank account' })
+    // Existing values are populated, including both catalog selects.
+    expect(within(form).getByLabelText(/^bank$/i)).toHaveValue('1')
+    expect(within(form).getByLabelText(/currency/i)).toHaveValue('1')
+    expect(within(form).getByLabelText(/iban/i)).toHaveValue('AZ00TEST0000000000')
+    expect(within(form).getByLabelText(/default account/i)).toBeChecked()
+
+    await user.clear(within(form).getByLabelText(/iban/i))
+    await user.type(within(form).getByLabelText(/iban/i), 'AZ99EDIT0000000001')
+    await user.click(within(form).getByRole('button', { name: /save changes/i }))
+
+    expect(await screen.findByText('Bank account updated.')).toBeInTheDocument()
+    expect(await screen.findByText(/AZ99EDIT0000000001/)).toBeInTheDocument()
+    expect(patches).toHaveLength(1)
+    expect(patches[0].url).toBe('/api/clients/1/bank-accounts/1/')
+    expect(patches[0].body).toMatchObject({ iban: 'AZ99EDIT0000000001' })
+  })
+
+  it('deletes a bank account only after confirmation and refreshes the list', async () => {
+    let rows: ClientBankAccount[] = [...clientDetail.bank_accounts]
+    const deletes: string[] = []
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/clients/1/bank-accounts/' && method === 'GET') {
+        return Promise.resolve(jsonResponse(200, rows))
+      }
+      if (url === '/api/clients/1/bank-accounts/1/' && method === 'DELETE') {
+        deletes.push(url)
+        rows = []
+        return Promise.resolve(new Response(null, { status: 204 }))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText(/AZ00TEST0000000000/)
+
+    const section = screen.getByRole('region', { name: 'Bank accounts' })
+    await user.click(within(section).getByRole('button', { name: /^delete$/i }))
+    expect(screen.getByText('Delete this bank account?')).toBeInTheDocument()
+    expect(deletes).toHaveLength(0)
+
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }))
+    expect(deletes).toHaveLength(0)
+    expect(screen.queryByText('Delete this bank account?')).not.toBeInTheDocument()
+
+    await user.click(within(section).getByRole('button', { name: /^delete$/i }))
+    await user.click(screen.getByRole('button', { name: /yes, delete/i }))
+
+    expect(await screen.findByText('Bank account deleted.')).toBeInTheDocument()
+    expect(await screen.findByText('No bank accounts found.')).toBeInTheDocument()
+    expect(deletes).toEqual(['/api/clients/1/bank-accounts/1/'])
+  })
+
+  it('shows a safe error when deleting fails', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/clients/1/bank-accounts/' && method === 'GET') {
+        return Promise.resolve(jsonResponse(200, clientDetail.bank_accounts))
+      }
+      if (url === '/api/clients/1/bank-accounts/1/' && method === 'DELETE') {
+        return Promise.resolve(jsonResponse(403, { detail: 'No permission.' }))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText(/AZ00TEST0000000000/)
+
+    const section = screen.getByRole('region', { name: 'Bank accounts' })
+    await user.click(within(section).getByRole('button', { name: /^delete$/i }))
+    await user.click(screen.getByRole('button', { name: /yes, delete/i }))
+
+    expect(
+      await screen.findByText('You do not have permission to manage bank accounts.'),
+    ).toBeInTheDocument()
+    // The row is still there — nothing was deleted.
+    expect(screen.getByText(/AZ00TEST0000000000/)).toBeInTheDocument()
+  })
+
+  it('shows retry actions when the bank or currency catalog fails to load', async () => {
+    let banksCalls = 0
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/clients/1/bank-accounts/') {
+        return Promise.resolve(jsonResponse(200, clientDetail.bank_accounts))
+      }
+      if (url === '/api/reference-data/banks/') {
+        banksCalls += 1
+        if (banksCalls === 1) return Promise.resolve(jsonResponse(500, {}))
+        return Promise.resolve(jsonResponse(200, banksFixture))
+      }
+      if (url === '/api/reference-data/currencies/') {
+        return Promise.resolve(jsonResponse(200, currenciesFixture))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    renderDetail()
+    await screen.findByRole('heading', { name: 'Acme Ltd' })
+    await screen.findByText(/AZ00TEST0000000000/)
+
+    await user.click(screen.getByRole('button', { name: /^add bank account$/i }))
+    expect(await screen.findByText("Couldn't load banks.")).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^retry$/i }))
+    expect(await screen.findByRole('option', { name: 'Test Bank' })).toBeInTheDocument()
+    expect(banksCalls).toBe(2)
   })
 })
 

@@ -3,6 +3,9 @@ import type {
   ClientAddress,
   ClientAddressInput,
   ClientAddressUpdateInput,
+  ClientBankAccount,
+  ClientBankAccountInput,
+  ClientBankAccountUpdateInput,
   ClientContact,
   ClientContactInput,
   ClientContactUpdateInput,
@@ -41,6 +44,16 @@ import type {
  *   * `PATCH  /clients/:id/contacts/:cid/`       → partial update →
  *                               `ClientContact` (200, needs `clients.update`)
  *   * `DELETE /clients/:id/contacts/:cid/`       → physical child delete →
+ *                               204 (needs `clients.update`)
+ *   * `GET    /clients/:id/bank-accounts/`        → array of `ClientBankAccount`
+ *                               (plain array, no pagination)
+ *   * `POST   /clients/:id/bank-accounts/`        → create → `ClientBankAccount`
+ *                               (201). GET needs `clients.read`; POST needs
+ *                               `clients.update`.
+ *   * `PATCH  /clients/:id/bank-accounts/:aid/`  → partial update →
+ *                               `ClientBankAccount` (200, needs
+ *                               `clients.update`)
+ *   * `DELETE /clients/:id/bank-accounts/:aid/`  → physical child delete →
  *                               204 (needs `clients.update`)
  *
  * The company is always the authenticated user's company; no `company_id` is
@@ -130,4 +143,34 @@ export function updateClientContact(
 /** Physically delete a contact (`DELETE /clients/:id/contacts/:cid/` → 204). */
 export function deleteClientContact(clientId: number, contactId: number): Promise<void> {
   return apiClient.delete<void>(`/clients/${clientId}/contacts/${contactId}/`)
+}
+
+/** List a client's bank accounts (`GET /clients/:id/bank-accounts/`, plain array). */
+export function listClientBankAccounts(clientId: number): Promise<ClientBankAccount[]> {
+  return apiClient.get<ClientBankAccount[]>(`/clients/${clientId}/bank-accounts/`)
+}
+
+/** Create a bank account for a client (`POST /clients/:id/bank-accounts/` → 201). */
+export function createClientBankAccount(
+  clientId: number,
+  input: ClientBankAccountInput,
+): Promise<ClientBankAccount> {
+  return apiClient.post<ClientBankAccount>(`/clients/${clientId}/bank-accounts/`, input)
+}
+
+/** Partially update a bank account (`PATCH /clients/:id/bank-accounts/:aid/`). */
+export function updateClientBankAccount(
+  clientId: number,
+  accountId: number,
+  input: ClientBankAccountUpdateInput,
+): Promise<ClientBankAccount> {
+  return apiClient.patch<ClientBankAccount>(
+    `/clients/${clientId}/bank-accounts/${accountId}/`,
+    input,
+  )
+}
+
+/** Physically delete a bank account (`DELETE /clients/:id/bank-accounts/:aid/` → 204). */
+export function deleteClientBankAccount(clientId: number, accountId: number): Promise<void> {
+  return apiClient.delete<void>(`/clients/${clientId}/bank-accounts/${accountId}/`)
 }

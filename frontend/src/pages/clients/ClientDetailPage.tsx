@@ -8,6 +8,7 @@ import { PageContainer } from '../../components/ui/PageContainer'
 import { ApiError, HTTP_STATUS } from '../../types/api'
 import type { ClientDetail } from '../../types/client'
 import { ClientAddressesSection } from './ClientAddressesSection'
+import { ClientBankAccountsSection } from './ClientBankAccountsSection'
 import { ClientContactsSection } from './ClientContactsSection'
 
 type State =
@@ -27,10 +28,10 @@ function formatDate(iso: string): string {
  * Client detail (`GET /api/clients/:id/`). The backend intentionally returns
  * 404 for both nonexistent and cross-tenant clients, so both cases render the
  * same safe "not found" state. Deleting is a soft-delete backed by the real
- * `DELETE` endpoint and requires an explicit confirmation step. Addresses and
- * contacts are managed through the tenant-scoped nested endpoints in
- * {@link ClientAddressesSection} and {@link ClientContactsSection};
- * bank accounts remain a read-only nested display.
+ * `DELETE` endpoint and requires an explicit confirmation step. Addresses,
+ * contacts, and bank accounts are managed through the tenant-scoped nested
+ * endpoints in {@link ClientAddressesSection}, {@link ClientContactsSection},
+ * and {@link ClientBankAccountsSection}.
  */
 export function ClientDetailPage() {
   const { clientId } = useParams()
@@ -249,22 +250,7 @@ export function ClientDetailPage() {
 
         <ClientAddressesSection clientId={client.id} />
 
-        <section aria-label="Bank accounts">
-          <h2 className="mb-1 text-sm font-semibold text-slate-700">Bank accounts</h2>
-          {client.bank_accounts.length === 0 ? (
-            <p className="text-sm text-slate-500">No bank accounts.</p>
-          ) : (
-            <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white text-sm">
-              {client.bank_accounts.map((account) => (
-                <li key={account.id} className="px-4 py-2 text-slate-700">
-                  {account.bank_name ?? 'Bank'}
-                  {` · ${account.iban}`}
-                  {account.currency_code ? ` · ${account.currency_code}` : ''}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        <ClientBankAccountsSection clientId={client.id} />
       </div>
     </PageContainer>
   )

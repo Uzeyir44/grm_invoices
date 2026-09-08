@@ -27,3 +27,16 @@ export interface AddressType {
   id: number
   code: string
 }
+
+/**
+ * `GET /api/reference-data/banks/` populates client bank selects
+ * (`{ id, name, swift_code, is_active }`, ordered by `name`). The bank
+ * account serializer takes the bank *id*; the read-only `bank_name` comes
+ * back on the row.
+ */
+export interface Bank {
+  id: number
+  name: string
+  swift_code: string | null
+  is_active: boolean
+}

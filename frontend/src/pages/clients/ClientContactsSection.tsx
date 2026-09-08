@@ -94,7 +94,7 @@ function valuesFor(contact: ClientContact): ContactFormValues {
  * is fetched independently of the client detail (own loading/error/retry
  * states), and after every successful mutation the collection is refetched
  * from the backend. Unlike addresses, contacts involve no reference-data
- * catalog. Bank accounts are out of scope and untouched.
+ * catalog.
  */
 export function ClientContactsSection({ clientId }: { clientId: number }) {
   const [contacts, setContacts] = useState<ClientContact[] | null>(null)

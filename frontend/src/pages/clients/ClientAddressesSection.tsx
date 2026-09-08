@@ -118,7 +118,7 @@ function formatAddress(address: ClientAddress): string {
  * section has its own loading/error/retry states; after every successful
  * mutation the collection is refetched from the backend. Address types come
  * from the real `GET /api/reference-data/address-types/` catalog — never
- * hardcoded. Contacts and bank accounts are out of scope and untouched.
+ * hardcoded.
  */
 export function ClientAddressesSection({ clientId }: { clientId: number }) {
   const [addresses, setAddresses] = useState<ClientAddress[] | null>(null)

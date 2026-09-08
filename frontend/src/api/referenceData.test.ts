@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchAddressTypes, fetchCurrencies, fetchDocumentTypes } from './referenceData'
+import { fetchAddressTypes, fetchBanks, fetchCurrencies, fetchDocumentTypes } from './referenceData'
 import { documentTypes, jsonResponse } from '../test/templateFixtures'
 
 const currencies = [
@@ -57,5 +57,17 @@ describe('referenceData API', () => {
     expect(url).toBe('/api/reference-data/address-types/')
     expect(init.method).toBe('GET')
     expect(result).toEqual(addressTypes)
+  })
+
+  it('fetches banks from the bank catalog endpoint', async () => {
+    const banks = [{ id: 1, name: 'Test Bank', swift_code: 'TESTAZ22', is_active: true }]
+    fetchMock.mockResolvedValue(jsonResponse(200, banks))
+
+    const result = await fetchBanks()
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/reference-data/banks/')
+    expect(init.method).toBe('GET')
+    expect(result).toEqual(banks)
   })
 })

@@ -2,16 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createClient,
   createClientAddress,
+  createClientBankAccount,
   createClientContact,
   deleteClient,
   deleteClientAddress,
+  deleteClientBankAccount,
   deleteClientContact,
   getClient,
   listClientAddresses,
+  listClientBankAccounts,
   listClientContacts,
   listClients,
   updateClient,
   updateClientAddress,
+  updateClientBankAccount,
   updateClientContact,
 } from './clients'
 import { clientDetail, clientSummaries, jsonResponse } from '../test/clientFixtures'
@@ -310,6 +314,106 @@ describe('clients API', () => {
     fetchMock.mockResolvedValue(jsonResponse(404, { detail: 'Not found.' }))
 
     await expect(deleteClientContact(1, 999)).rejects.toMatchObject({
+      status: HTTP_STATUS.NOT_FOUND,
+    })
+  })
+
+  it('lists client bank accounts from the nested collection endpoint', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, clientDetail.bank_accounts))
+    setAccessToken('token-1')
+
+    const result = await listClientBankAccounts(1)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/clients/1/bank-accounts/')
+    expect(init.method).toBe('GET')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-1')
+    expect(result).toEqual(clientDetail.bank_accounts)
+  })
+
+  it('creates a bank account with the nested serializer body', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(201, clientDetail.bank_accounts[0]))
+
+    const body = {
+      bank: 1,
+      currency: 1,
+      iban: 'AZ00TEST0000000000',
+      swift_bic: null,
+      is_default: true,
+    }
+    const result = await createClientBankAccount(1, body)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/clients/1/bank-accounts/')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual(body)
+    expect(result).toEqual(clientDetail.bank_accounts[0])
+  })
+
+  it('never sends a company_id in the bank account payload', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(201, clientDetail.bank_accounts[0]))
+
+    await createClientBankAccount(1, { currency: 1, iban: 'AZ00TEST0000000000' })
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>
+    expect(body.company_id).toBeUndefined()
+    expect(body.company).toBeUndefined()
+    expect(body.client).toBeUndefined()
+  })
+
+  it('updates a bank account with PATCH and a partial body', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, clientDetail.bank_accounts[0]))
+
+    const result = await updateClientBankAccount(1, 7, { is_default: true })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/clients/1/bank-accounts/7/')
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(String(init.body))).toEqual({ is_default: true })
+    expect(result).toEqual(clientDetail.bank_accounts[0])
+  })
+
+  it('deletes a bank account via DELETE and resolves on 204', async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }))
+
+    await expect(deleteClientBankAccount(1, 7)).resolves.toBeUndefined()
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/clients/1/bank-accounts/7/')
+    expect(init.method).toBe('DELETE')
+  })
+
+  it('preserves backend bank account field validation errors', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(400, { iban: ['This IBAN is already in use for this client.'] }),
+    )
+
+    const error = await createClientBankAccount(1, {
+      currency: 1,
+      iban: 'AZ00TEST0000000000',
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(HTTP_STATUS.BAD_REQUEST)
+    expect((error as ApiError).fieldErrors.iban).toEqual([
+      'This IBAN is already in use for this client.',
+    ])
+  })
+
+  it('converts a bank account 403 into a typed ApiError', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(403, { detail: 'No permission.' }))
+
+    await expect(listClientBankAccounts(1)).rejects.toMatchObject({
+      status: HTTP_STATUS.FORBIDDEN,
+    })
+    await expect(listClientBankAccounts(1)).rejects.toBeInstanceOf(ApiError)
+  })
+
+  it('converts a bank account 404 into a typed ApiError', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(404, { detail: 'Not found.' }))
+
+    await expect(deleteClientBankAccount(1, 999)).rejects.toMatchObject({
       status: HTTP_STATUS.NOT_FOUND,
     })
   })

@@ -22,6 +22,17 @@
  * * `PATCH /api/clients/:id/contacts/:cid/`    → `ClientContact` (200, partial)
  * * `DELETE /api/clients/:id/contacts/:cid/`   → 204 (physical child delete)
  *
+ * Nested bank accounts (`ClientBankAccountSerializer`, tenant- and
+ * parent-scoped):
+ * * `GET /api/clients/:id/bank-accounts/`         → array of
+ *                                                  `ClientBankAccount`
+ *                                                  (plain array, no pagination)
+ * * `POST /api/clients/:id/bank-accounts/`        → `ClientBankAccount` (201)
+ * * `PATCH /api/clients/:id/bank-accounts/:aid/`  → `ClientBankAccount`
+ *                                                  (200, partial)
+ * * `DELETE /api/clients/:id/bank-accounts/:aid/` → 204 (physical child
+ *                                                  delete)
+ *
  * The list response carries no pagination metadata: the backend returns the
  * caller's company-scoped clients as a plain array.
  */
@@ -164,6 +175,26 @@ export interface ClientContactInput {
 
 /** Partial update accepted by `PATCH /api/clients/:id/contacts/:cid/`. */
 export type ClientContactUpdateInput = Partial<ClientContactInput>
+
+/**
+ * Bank account inputs accepted by the nested bank account serializer
+ * (`ClientBankAccountSerializer`). Writable fields only: `id`, `bank_name`
+ * and `currency_code` are read-only. `bank` is the Bank id (optional —
+ * nullable FK); `currency` is the Currency id (required); `iban` is required
+ * (unique per client); `swift_bic` is an optional nullable code;
+ * `is_default` defaults to false and the backend allows only one default
+ * account per client.
+ */
+export interface ClientBankAccountInput {
+  bank?: number | null
+  currency: number
+  iban: string
+  swift_bic?: string | null
+  is_default?: boolean
+}
+
+/** Partial update accepted by `PATCH /api/clients/:id/bank-accounts/:aid/`. */
+export type ClientBankAccountUpdateInput = Partial<ClientBankAccountInput>
 
 /** Backend-supported list query parameters (`GET /api/clients/`). */
 export interface ClientsListParams {

@@ -127,6 +127,11 @@ company (the frontend never sends `company_id`).
 | `POST /api/clients/:id/contacts/` | create contact (201) | `createClientContact(clientId, input)` |
 | `PATCH /api/clients/:id/contacts/:contactId/` | partial contact update (200) | `updateClientContact(clientId, contactId, input)` |
 | `DELETE /api/clients/:id/contacts/:contactId/` | **physical** contact delete (204) | `deleteClientContact(clientId, contactId)` |
+| `GET /api/clients/:id/bank-accounts/` | bank account list (plain array, **no pagination**) | `listClientBankAccounts(clientId)` |
+| `POST /api/clients/:id/bank-accounts/` | create bank account (201) | `createClientBankAccount(clientId, input)` |
+| `PATCH /api/clients/:id/bank-accounts/:accountId/` | partial bank account update (200) | `updateClientBankAccount(clientId, accountId, input)` |
+| `DELETE /api/clients/:id/bank-accounts/:accountId/` | **physical** bank account delete (204) | `deleteClientBankAccount(clientId, accountId)` |
+| `GET /api/reference-data/banks/` | bank catalog for the form | `fetchBanks()` |
 
 - **List** — search box (`search`), status and client-type filters, all mapped
   to the real backend query parameters and stored in the URL (refresh /
@@ -137,9 +142,10 @@ company (the frontend never sends `company_id`).
   (`client_type`, `status`, and the matching legal-entity / individual
   subtype). Required fields are marked; empty optional values are sent as
   `null`.
-- **Detail** (`/clients/:clientId`) — displays the client, subtype, and the
-  read-only nested data already present in the detail response (contacts,
-  bank accounts). **Addresses** are managed through the dedicated nested
+- **Detail** (`/clients/:clientId`) — displays the client and subtype.
+  The nested resources below are managed through their dedicated endpoints
+  rather than the embedded detail arrays.
+- **Detail addresses** — managed through the dedicated nested
   endpoints (`src/pages/clients/ClientAddressesSection.tsx`): the section
   fetches its own collection (own loading/error/retry states), shows every
   serializer field (street, city, region, postal code, country, type code,
@@ -161,8 +167,19 @@ company (the frontend never sends `company_id`).
   address), and the `is_primary` flag (one primary contact per client,
   backend field error otherwise). No reference data is involved. Mutations
   refetch the collection; delete requires explicit inline confirmation.
-  Bank-account *editing* uses separate backend endpoints and is out of scope
-  for this phase.
+- **Detail bank accounts** — managed through the dedicated nested endpoints
+  (`src/pages/clients/ClientBankAccountsSection.tsx`) following the same
+  architecture: independent collection fetch with own loading/error/retry
+  states, every serializer field shown (bank name, IBAN, currency code,
+  default marker), add / edit / physical delete. The form uses the real
+  serializer fields — optional `bank` (from the `banks` reference-data
+  catalog, sent as `null` when unset), required `currency` (from the
+  `currencies` catalog), required `iban` (unique per client, backend field
+  error otherwise), optional `swift_bic`, and the `is_default` flag (one
+  default account per client, backend field error otherwise). Mutations
+  refetch the collection; delete requires explicit inline confirmation.
+  All three nested-resource areas (addresses, contacts, bank accounts) are
+  now implemented.
 - **Edit** (`/clients/:clientId/edit`) — pre-filled PATCH form. `client_type`
   is immutable (the backend enforces this), so it is shown disabled.
 - **Delete** — soft-delete with an explicit inline confirmation step; after
@@ -582,11 +599,10 @@ search/filter/write controls), plus protected routing for `/templates`,
   endpoints need a version id, so file availability (`storage.docx` /
   `storage.pdf`) is read from the versions list. There is no line-item/totals
   view yet (the detail serializer returns none).
-- Nested bank-account editing is a separate later phase; the
-  client detail page only displays the read-only data already returned by the
-  client detail endpoint for those. (Address and contact editing are
-  implemented via the dedicated nested endpoints; unlike client soft-delete,
-  address/contact deletion is a physical child-row delete on the backend.)
+- Nested client resources are fully implemented: addresses, contacts, and
+  bank accounts each have a dedicated managed section on the client detail
+  page. Unlike client soft-delete, nested-row deletion is a physical
+  child-row delete on the backend.
 - The template file **remove-only** endpoint (`DELETE .../file/`, which clears
   the current file without deleting the template) exists on the backend but is
   not surfaced as a UI action in this phase.
