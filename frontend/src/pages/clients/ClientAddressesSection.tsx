@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 
 import {
   createClientAddress,
@@ -142,24 +142,34 @@ export function ClientAddressesSection({ clientId }: { clientId: number }) {
   const [deleteError, setDeleteError] = useState<string>()
   const [notice, setNotice] = useState<string>()
 
-  const loadAddresses = useCallback(() => {
+  // Refresh the collection through the effect above (which guards against
+  // stale in-flight responses) rather than fetching imperatively.
+  const refreshAddresses = () => {
+    setReloadKey((key) => key + 1)
+  }
+
+  useEffect(() => {
+    // A stale in-flight response must never overwrite a newer client when
+    // navigating rapidly between detail routes.
+    let cancelled = false
     void listClientAddresses(clientId)
       .then((data) => {
+        if (cancelled) return
         setAddresses(data)
         setLoadError(null)
       })
       .catch((error: unknown) => {
+        if (cancelled) return
         setLoadError(
           error instanceof ApiError
             ? error
             : new ApiError({ status: 0, payload: null, message: "Couldn't load addresses." }),
         )
       })
-  }, [clientId])
-
-  useEffect(() => {
-    loadAddresses()
-  }, [clientId, reloadKey, loadAddresses])
+    return () => {
+      cancelled = true
+    }
+  }, [clientId, reloadKey])
 
   // The type catalog is only needed for the form; load it lazily on first
   // open so the section does not depend on a second catalog to display rows.
@@ -259,7 +269,7 @@ export function ClientAddressesSection({ clientId }: { clientId: number }) {
         setNotice('Address added.')
       }
       closeForm()
-      loadAddresses()
+      refreshAddresses()
     } catch (error) {
       if (error instanceof ApiError) {
         const backendFieldErrors = firstFieldErrors(error)
@@ -286,7 +296,7 @@ export function ClientAddressesSection({ clientId }: { clientId: number }) {
       await deleteClientAddress(clientId, addressId)
       setConfirmDeleteId(null)
       setNotice('Address deleted.')
-      loadAddresses()
+      refreshAddresses()
     } catch (error) {
       setDeleteError(
         error instanceof ApiError
@@ -345,7 +355,7 @@ export function ClientAddressesSection({ clientId }: { clientId: number }) {
                   key={address.id}
                   className="flex flex-wrap items-center justify-between gap-2 px-4 py-2"
                 >
-                  <div className="min-w-0 text-slate-700">
+                  <div className="min-w-0 break-words text-slate-700">
                     <span className="font-medium text-slate-900">{formatAddress(address)}</span>
                     {address.address_type_code ? (
                       <span className="text-slate-500"> · {address.address_type_code}</span>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import { deleteClient, getClient } from '../../api/clients'
@@ -42,11 +42,20 @@ export function ClientDetailPage() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string>()
+  const [reloadKey, setReloadKey] = useState(0)
 
-  const load = useCallback(() => {
+  useEffect(() => {
+    if (Number.isNaN(id)) return
+    // A stale in-flight response must never overwrite a newer client when
+    // navigating rapidly between detail routes.
+    let cancelled = false
     void getClient(id)
-      .then((data) => setState({ status: 'ready', data }))
+      .then((data) => {
+        if (cancelled) return
+        setState({ status: 'ready', data })
+      })
       .catch((error: unknown) => {
+        if (cancelled) return
         if (error instanceof ApiError && error.status === HTTP_STATUS.NOT_FOUND) {
           setState({ status: 'notfound' })
         } else if (error instanceof ApiError && error.status === HTTP_STATUS.FORBIDDEN) {
@@ -55,16 +64,14 @@ export function ClientDetailPage() {
           setState({ status: 'error' })
         }
       })
-  }, [id])
-
-  useEffect(() => {
-    if (Number.isNaN(id)) return
-    void load()
-  }, [id, load])
+    return () => {
+      cancelled = true
+    }
+  }, [id, reloadKey])
 
   function retry() {
     setState({ status: 'loading' })
-    void load()
+    setReloadKey((key) => key + 1)
   }
 
   async function handleDelete() {

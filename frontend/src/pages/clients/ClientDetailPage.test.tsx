@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, RouterProvider, Routes, createMemoryRouter } from 'react-router-dom'
+import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ClientDetailPage } from './ClientDetailPage'
 import { clientDetail, jsonResponse } from '../../test/clientFixtures'
@@ -207,6 +208,52 @@ describe('ClientDetailPage', () => {
     expect(deleteCall?.[0]).toBe('/api/clients/1/')
 
     expect(await screen.findByTestId('list-view')).toBeInTheDocument()
+  })
+
+  it('ignores a stale client response after navigating to another client', async () => {
+    const client2 = {
+      ...clientDetail,
+      id: 2,
+      legal_entity: { ...clientDetail.legal_entity, legal_name: 'Beta LLC' },
+    }
+    const addresses2 = [{ ...clientDetail.addresses[0], id: 9, line1: 'Second St 2' }]
+    let resolveClient1!: (response: Response) => void
+    const client1Promise = new Promise<Response>((resolve) => {
+      resolveClient1 = resolve
+    })
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/clients/1/') return client1Promise
+      if (url === '/api/clients/2/') return Promise.resolve(jsonResponse(200, client2))
+      if (url === '/api/clients/2/addresses/') {
+        return Promise.resolve(jsonResponse(200, addresses2))
+      }
+      if (url === '/api/clients/2/contacts/') {
+        return Promise.resolve(jsonResponse(200, []))
+      }
+      if (url === '/api/clients/2/bank-accounts/') {
+        return Promise.resolve(jsonResponse(200, []))
+      }
+      return Promise.resolve(jsonResponse(200, clientDetail))
+    })
+    const router = createMemoryRouter(
+      [{ path: '/clients/:clientId', element: <ClientDetailPage /> }],
+      { initialEntries: ['/clients/1'] },
+    )
+    render(<RouterProvider router={router} />)
+    expect(screen.getByTestId('client-loading')).toBeInTheDocument()
+
+    await act(async () => {
+      await router.navigate('/clients/2')
+    })
+    expect(await screen.findByRole('heading', { name: 'Beta LLC' })).toBeInTheDocument()
+
+    // The client-1 response arrives late and must be ignored — including its
+    // nested sections, which never mounted for client 1.
+    resolveClient1(jsonResponse(200, clientDetail))
+    expect(await screen.findByText(/Second St 2/)).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Acme Ltd' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Main St 1/)).not.toBeInTheDocument()
   })
 })
 

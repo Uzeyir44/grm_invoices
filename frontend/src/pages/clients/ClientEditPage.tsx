@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
 import { getClient, updateClient } from '../../api/clients'
@@ -73,10 +73,16 @@ export function ClientEditPage() {
   const [fieldErrors, setFieldErrors] = useState<Errors>({})
   const [formError, setFormError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
 
-  const load = useCallback(() => {
+  useEffect(() => {
+    if (Number.isNaN(id)) return
+    // A stale in-flight response must never overwrite a newer client when
+    // navigating rapidly between edit routes.
+    let cancelled = false
     void getClient(id)
       .then((data) => {
+        if (cancelled) return
         setClientType(data.client_type)
         setStatus(data.status)
         setLegal({
@@ -96,6 +102,7 @@ export function ClientEditPage() {
         setLoadError(undefined)
       })
       .catch((error: unknown) => {
+        if (cancelled) return
         if (error instanceof ApiError && error.status === HTTP_STATUS.NOT_FOUND) {
           setNotFound(true)
         } else if (error instanceof ApiError && error.status === HTTP_STATUS.FORBIDDEN) {
@@ -104,8 +111,13 @@ export function ClientEditPage() {
           setLoadError("Couldn't load the client.")
         }
       })
-      .finally(() => setLoading(false))
-  }, [id])
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [id, reloadKey])
 
   const setField = (group: 'legal' | 'individual', field: string, value: string) => {
     if (group === 'legal') {
@@ -115,13 +127,9 @@ export function ClientEditPage() {
     }
   }
 
-  useEffect(() => {
-    if (!Number.isNaN(id)) void load()
-  }, [id, load])
-
   function retryLoad() {
     setLoading(true)
-    void load()
+    setReloadKey((key) => key + 1)
   }
 
   function validate(): Errors {

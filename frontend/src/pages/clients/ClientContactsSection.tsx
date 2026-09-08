@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 
 import {
   createClientContact,
@@ -113,24 +113,34 @@ export function ClientContactsSection({ clientId }: { clientId: number }) {
   const [deleteError, setDeleteError] = useState<string>()
   const [notice, setNotice] = useState<string>()
 
-  const loadContacts = useCallback(() => {
+  // Refresh the collection through the effect below (which guards against
+  // stale in-flight responses) rather than fetching imperatively.
+  const refreshContacts = () => {
+    setReloadKey((key) => key + 1)
+  }
+
+  useEffect(() => {
+    // A stale in-flight response must never overwrite a newer client when
+    // navigating rapidly between detail routes.
+    let cancelled = false
     void listClientContacts(clientId)
       .then((data) => {
+        if (cancelled) return
         setContacts(data)
         setLoadError(null)
       })
       .catch((error: unknown) => {
+        if (cancelled) return
         setLoadError(
           error instanceof ApiError
             ? error
             : new ApiError({ status: 0, payload: null, message: "Couldn't load contacts." }),
         )
       })
-  }, [clientId])
-
-  useEffect(() => {
-    loadContacts()
-  }, [clientId, reloadKey, loadContacts])
+    return () => {
+      cancelled = true
+    }
+  }, [clientId, reloadKey])
 
   const retry = () => setReloadKey((key) => key + 1)
 
@@ -198,7 +208,7 @@ export function ClientContactsSection({ clientId }: { clientId: number }) {
         setNotice('Contact added.')
       }
       closeForm()
-      loadContacts()
+      refreshContacts()
     } catch (error) {
       if (error instanceof ApiError) {
         const backendFieldErrors = firstFieldErrors(error)
@@ -225,7 +235,7 @@ export function ClientContactsSection({ clientId }: { clientId: number }) {
       await deleteClientContact(clientId, contactId)
       setConfirmDeleteId(null)
       setNotice('Contact deleted.')
-      loadContacts()
+      refreshContacts()
     } catch (error) {
       setDeleteError(
         error instanceof ApiError
@@ -284,7 +294,7 @@ export function ClientContactsSection({ clientId }: { clientId: number }) {
                   key={contact.id}
                   className="flex flex-wrap items-center justify-between gap-2 px-4 py-2"
                 >
-                  <div className="min-w-0 text-slate-700">
+                  <div className="min-w-0 break-words text-slate-700">
                     <span className="font-medium text-slate-900">{contact.full_name}</span>
                     {contact.position ? ` — ${contact.position}` : ''}
                     {contact.email ? ` · ${contact.email}` : ''}

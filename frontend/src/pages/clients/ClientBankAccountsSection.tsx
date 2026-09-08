@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 
 import {
   createClientBankAccount,
@@ -119,24 +119,34 @@ export function ClientBankAccountsSection({ clientId }: { clientId: number }) {
   const [deleteError, setDeleteError] = useState<string>()
   const [notice, setNotice] = useState<string>()
 
-  const loadAccounts = useCallback(() => {
+  // Refresh the collection through the effect below (which guards against
+  // stale in-flight responses) rather than fetching imperatively.
+  const refreshAccounts = () => {
+    setReloadKey((key) => key + 1)
+  }
+
+  useEffect(() => {
+    // A stale in-flight response must never overwrite a newer client when
+    // navigating rapidly between detail routes.
+    let cancelled = false
     void listClientBankAccounts(clientId)
       .then((data) => {
+        if (cancelled) return
         setAccounts(data)
         setLoadError(null)
       })
       .catch((error: unknown) => {
+        if (cancelled) return
         setLoadError(
           error instanceof ApiError
             ? error
             : new ApiError({ status: 0, payload: null, message: "Couldn't load bank accounts." }),
         )
       })
-  }, [clientId])
-
-  useEffect(() => {
-    loadAccounts()
-  }, [clientId, reloadKey, loadAccounts])
+    return () => {
+      cancelled = true
+    }
+  }, [clientId, reloadKey])
 
   // Both catalogs are only needed for the form; load them lazily on first
   // open so the section does not depend on catalogs to display rows.
@@ -253,7 +263,7 @@ export function ClientBankAccountsSection({ clientId }: { clientId: number }) {
         setNotice('Bank account added.')
       }
       closeForm()
-      loadAccounts()
+      refreshAccounts()
     } catch (error) {
       if (error instanceof ApiError) {
         const backendFieldErrors = firstFieldErrors(error)
@@ -282,7 +292,7 @@ export function ClientBankAccountsSection({ clientId }: { clientId: number }) {
       await deleteClientBankAccount(clientId, accountId)
       setConfirmDeleteId(null)
       setNotice('Bank account deleted.')
-      loadAccounts()
+      refreshAccounts()
     } catch (error) {
       setDeleteError(
         error instanceof ApiError
