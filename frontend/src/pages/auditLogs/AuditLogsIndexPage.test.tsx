@@ -33,6 +33,8 @@ describe('AuditLogsIndexPage', () => {
     fetchMock.mockReturnValue(new Promise<Response>(() => {}))
     renderAuditLogs()
     expect(screen.getByTestId('audit-logs-loading')).toHaveTextContent('Loading…')
+    // Announced to assistive technology as a live-region status.
+    expect(screen.getByRole('status')).toHaveTextContent('Loading…')
   })
 
   it('requests the first page without a page query parameter', async () => {
@@ -60,7 +62,11 @@ describe('AuditLogsIndexPage', () => {
     expect(
       screen.getByRole('cell', { name: '11111111-1111-4111-8111-111111111111' }),
     ).toBeInTheDocument()
-    expect(screen.getByRole('cell', { name: '2026-09-05 10:00' })).toBeInTheDocument()
+    expect(screen.getByRole('cell', { name: '2026-09-05 10:00 UTC' })).toBeInTheDocument()
+    // The table carries an accessible caption describing content and order.
+    expect(
+      screen.getByRole('table', { name: 'Audit logs, newest first. Timestamps are in UTC.' }),
+    ).toBeInTheDocument()
     // A deleted/null user renders as an em dash, never a fabricated name.
     const nullUserRow = screen.getByRole('cell', { name: 'user.role_changed' }).closest('tr')
     const nullUserRowText = within(nullUserRow as HTMLElement)
@@ -342,7 +348,13 @@ describe('AuditLogsIndexPage', () => {
     await screen.findByTestId('audit-logs-page')
     fetchMock.mockClear()
 
-    await user.type(screen.getByLabelText(/filter by action/i), 'update')
+    // A single synchronous change: per-keystroke typing time varies with
+    // suite load and would eat the wait budget before the fixed 250 ms
+    // debounce even starts. Keystroke coalescing is covered by the dedicated
+    // debounce test; the page-reset assertion here is unchanged.
+    fireEvent.change(screen.getByLabelText(/filter by action/i), {
+      target: { value: 'update' },
+    })
 
     await vi.waitFor(() => {
       const urls = fetchMock.mock.calls.map(([callUrl]) => String(callUrl))
@@ -380,7 +392,11 @@ describe('AuditLogsIndexPage', () => {
     await screen.findByTestId('audit-logs-count')
     fetchMock.mockClear()
 
-    await user.type(screen.getByLabelText(/filter by action/i), 'update')
+    // Single synchronous change (see the page-reset test): keeps this test
+    // independent of keystroke timing under suite load.
+    fireEvent.change(screen.getByLabelText(/filter by action/i), {
+      target: { value: 'update' },
+    })
     await vi.waitFor(() => {
       const urls = fetchMock.mock.calls.map(([callUrl]) => String(callUrl))
       expect(urls.some((callUrl) => callUrl.includes('action=update'))).toBe(true)

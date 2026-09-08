@@ -297,6 +297,11 @@ describe('App', () => {
 
     await user.click(auditLogsLink)
     expect(await screen.findByText('No audit logs found.')).toBeInTheDocument()
+    // The active route is communicated to assistive technology.
+    expect(screen.getByRole('link', { name: /audit logs/i })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
   })
 
   it('renders a not-found page for unknown routes', async () => {

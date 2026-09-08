@@ -334,10 +334,12 @@ authenticated user's company (the frontend never sends `company_id`).
 | `GET /api/audit-logs/` | paginated list (`{ count, next, previous, results }`, newest first) | `listAuditLogs({ page?, page_size?, action?, entity_type?, entity_id?, user_id?, created_after?, created_before? })` |
 
 - The list shows the fields the backend `AuditLogSerializer` actually
-  returns: `created_at` (UTC `YYYY-MM-DD HH:mm`), `action`, `entity_type` +
-  `entity_id`, `user_id` (`User #<id>`, `—` when the user was deleted),
-  `ip_address`, and `request_id`. `previous_values` / `new_values` /
-  `user_agent` are row payloads, not list columns, so they are not shown.
+  returns: `created_at` (UTC, displayed as `YYYY-MM-DD HH:mm UTC` with an
+  explicit zone label and a table caption stating newest-first/UTC),
+  `action`, `entity_type` + `entity_id`, `user_id` (`User #<id>`, `—` when
+  the user was deleted), `ip_address`, and `request_id` (visually truncated
+  with the full value kept in the `title`). `previous_values` / `new_values`
+  / `user_agent` are row payloads, not list columns, so they are not shown.
 - **Filtering** maps 1:1 to the backend `AuditLogQuerySerializer` (the only
   accepted keys, all composable and tenant-scoped): exact-match `action` and
   `entity_type` (free-form text inputs — the backend defines no fixed
@@ -372,6 +374,20 @@ authenticated user's company (the frontend never sends `company_id`).
 - Read-only: no create/edit/delete/detail/export actions exist;
   advanced filtering beyond the six backend-supported parameters is a later
   step.
+- Accessibility/responsive notes: every filter has an associated label, the
+  filter form has an accessible name, loading indicators use `role="status"`,
+  the table has a screen-reader caption, pagination buttons use `disabled`
+  (not color alone), and the table scrolls horizontally inside its container
+  on narrow screens instead of breaking the layout.
+
+### Audit Log detail — backend-blocked
+
+There is intentionally **no** `/audit-logs/:auditLogId` route and no
+`getAuditLog()` API function: the backend exposes only the list endpoint
+(`GET /api/audit-logs/`) and no retrieve/detail endpoint or detail
+serializer, so a detail page would have nothing real to fetch. Audit rows do
+not link anywhere. This stays blocked until the backend adds a real
+tenant-scoped retrieve endpoint.
 
 ## API client
 

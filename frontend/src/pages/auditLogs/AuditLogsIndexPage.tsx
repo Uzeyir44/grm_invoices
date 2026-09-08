@@ -28,11 +28,16 @@ function toOptionalInt(raw: string): number | undefined {
   return Number.isFinite(parsed) ? Math.trunc(parsed) : undefined
 }
 
-/** Deterministic UTC rendering (`YYYY-MM-DD HH:mm`); falls back to raw input. */
+/**
+ * Deterministic UTC rendering (`YYYY-MM-DD HH:mm UTC`); falls back to raw
+ * input. The backend stores UTC and the application displays UTC (via
+ * `toISOString`), so the zone is labeled explicitly instead of silently
+ * assumed.
+ */
 function formatTimestamp(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
-  return `${date.toISOString().slice(0, 10)} ${date.toISOString().slice(11, 16)}`
+  return `${date.toISOString().slice(0, 10)} ${date.toISOString().slice(11, 16)} UTC`
 }
 
 function formatUserId(userId: number | null): string {
@@ -341,7 +346,11 @@ export function AuditLogsIndexPage() {
         )}
 
         {showInitialLoading && (
-          <p data-testid="audit-logs-loading" className="animate-pulse text-sm text-slate-400">
+          <p
+            role="status"
+            data-testid="audit-logs-loading"
+            className="animate-pulse text-sm text-slate-400"
+          >
             Loading…
           </p>
         )}
@@ -369,6 +378,9 @@ export function AuditLogsIndexPage() {
           <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <caption className="sr-only">
+                  Audit logs, newest first. Timestamps are in UTC.
+                </caption>
                 <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                   <tr>
                     <th scope="col" className="px-4 py-2 font-medium">
@@ -443,7 +455,11 @@ export function AuditLogsIndexPage() {
               Next
             </button>
             {showPageChanging ? (
-              <p data-testid="audit-logs-page-loading" className="animate-pulse text-sm text-slate-400">
+              <p
+                role="status"
+                data-testid="audit-logs-page-loading"
+                className="animate-pulse text-sm text-slate-400"
+              >
                 Loading…
               </p>
             ) : null}
