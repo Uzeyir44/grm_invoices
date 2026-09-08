@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from '../components/layout/AppShell'
 import { AuthLayout } from '../components/layout/AuthLayout'
 import { LoginPage } from '../pages/auth/LoginPage'
+import { AuditLogsIndexPage } from '../pages/auditLogs/AuditLogsIndexPage'
 import { ClientCreatePage } from '../pages/clients/ClientCreatePage'
 import { ClientDetailPage } from '../pages/clients/ClientDetailPage'
 import { ClientEditPage } from '../pages/clients/ClientEditPage'
@@ -43,6 +44,7 @@ export function AppRouter() {
           <Route path="documents" element={<DocumentsIndexPage />} />
           <Route path="documents/new" element={<DocumentCreatePage />} />
           <Route path="documents/:documentId" element={<DocumentDetailPage />} />
+          <Route path="audit-logs" element={<AuditLogsIndexPage />} />
         </Route>
       </Route>
       <Route path="login" element={<AuthLayout />}>

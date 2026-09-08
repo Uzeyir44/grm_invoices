@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { to: '/clients', label: 'Clients' },
   { to: '/templates', label: 'Templates' },
   { to: '/documents', label: 'Documents' },
+  { to: '/audit-logs', label: 'Audit logs' },
 ] as const
 
 function navLinkClasses(isActive: boolean): string {

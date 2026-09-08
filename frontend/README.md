@@ -3,6 +3,13 @@
 Frontend application for the GRM CRM Django backend.
 
 Implemented so far:
+- **Audit logs filtering & search** (Audit Logs Step 2): `/audit-logs` filters
+  map 1:1 to the backend's supported query parameters (exact-match action /
+  entity type / entity / user, timestamp bounds), kept in the URL with
+  pagination integration.
+- **Audit logs read-only list** (Audit Logs Step 1): `/audit-logs` shows the
+  real audit records for the authenticated company (no detail/export — those
+  are later steps).
 - **PDF generation + download** (Phase 6.5): on `/documents/:documentId`, a
   generated document's DOCX version can be converted to PDF and the resulting
   file downloaded through the authenticated backend endpoints.
@@ -69,7 +76,8 @@ npm run preview     # preview the production build
 
 The authenticated area renders through `AppShell` (`src/components/layout/`):
 
-- **Sidebar** — navigation for Dashboard, Clients, Templates, Documents
+- **Sidebar** — navigation for Dashboard, Clients, Templates, Documents,
+  Audit logs
   (all live router links; the active route is marked with `aria-current`). On
   mobile the sidebar becomes an overlay toggled from the header.
 - **Header** — the authenticated company name, user display name, and email
@@ -315,6 +323,56 @@ errors render on the offending row, and `detail` messages (e.g. missing active
 template) render as a form-level message. `company_id` is never sent; the
 backend derives the tenant from the authenticated user.
 
+## Audit logs
+
+`/audit-logs` (`src/pages/auditLogs/`) is a read-only audit history backed by
+the existing Django `audit_logs` API — the company is always the
+authenticated user's company (the frontend never sends `company_id`).
+
+| Backend endpoint | Operation | API module fn |
+|---|---|---|
+| `GET /api/audit-logs/` | paginated list (`{ count, next, previous, results }`, newest first) | `listAuditLogs({ page?, page_size?, action?, entity_type?, entity_id?, user_id?, created_after?, created_before? })` |
+
+- The list shows the fields the backend `AuditLogSerializer` actually
+  returns: `created_at` (UTC `YYYY-MM-DD HH:mm`), `action`, `entity_type` +
+  `entity_id`, `user_id` (`User #<id>`, `—` when the user was deleted),
+  `ip_address`, and `request_id`. `previous_values` / `new_values` /
+  `user_agent` are row payloads, not list columns, so they are not shown.
+- **Filtering** maps 1:1 to the backend `AuditLogQuerySerializer` (the only
+  accepted keys, all composable and tenant-scoped): exact-match `action` and
+  `entity_type` (free-form text inputs — the backend defines no fixed
+  choices), integer `entity_id` / `user_id`, and the `created_after`
+  (`created_at >=`) / `created_before` (`created_at <=`) timestamp bounds
+  (`datetime-local` inputs). There is **no** backend free-text search and no
+  ordering parameter, so none is shown. Invalid integers/datetimes, or
+  `created_after` later than `created_before`, are a backend 400 surfaced
+  through the normal error state.
+- Filter typing is debounced (250 ms, same as the client search) so typing
+  does not fire a request per keystroke; one filtered request fires per
+  change set. Filters live in the URL (`?action=&entity_type=&entity_id=&
+  user_id=&created_after=&created_before=`, refresh / back-forward safe):
+  changing a filter resets to page 1, paging keeps the active filters, and a
+  **Clear filters** action (in the filter bar and in the filtered empty
+  state) removes all filter parameters and reloads the unfiltered list.
+- A filtered search with zero hits shows "No audit logs match your filters."
+  (distinct from the unfiltered "No audit logs found."). A failed filtered
+  request shows the normal error state with retry and keeps the filter values
+  in place.
+- **Pagination** follows the backend's `PageNumberPagination` contract
+  (default size 50, max 100): Previous/Next buttons are driven by the
+  envelope's `previous`/`next` presence, the total comes from `count`, and the
+  current page is kept in the URL (`?page=`, omitted for page 1) so refresh /
+  back-forward preserve the state. An out-of-range page is a backend 404 and
+  renders a safe not-found state with a "Back to first page" action.
+- States: loading (no fake rows/counts, plus an inline indicator while
+  changing pages), empty ("No audit logs found."), and safe error states with
+  a retry action — 403 a safe access-denied message (the backend owns the
+  `audit_logs.read` permission check), 429 a friendly retry message, other
+  failures a generic message. 401 is handled by the existing refresh flow.
+- Read-only: no create/edit/delete/detail/export actions exist;
+  advanced filtering beyond the six backend-supported parameters is a later
+  step.
+
 ## API client
 
 `src/api/client.ts` is the single HTTP entry point: GET/POST/PUT/PATCH/DELETE,
@@ -324,7 +382,7 @@ payload, `fieldErrors`, `Retry-After`, safe message). `apiClient.raw` returns
 the unparsed `Response` for authenticated binary downloads — it still carries
 the bearer token and the same refresh/error handling. Small modules built on it
 for the dashboard and features: `src/api/clients.ts`, `src/api/templates.ts`,
-`src/api/documents.ts`, `src/api/referenceData.ts`.
+`src/api/documents.ts`, `src/api/auditLogs.ts`, `src/api/referenceData.ts`.
 
 ## Authentication flow
 
@@ -367,6 +425,7 @@ trigger the refresh flow.
 /documents     → generated document list (protected, inside AppShell)
 /documents/new → create generated document (protected, inside AppShell)
 /documents/:documentId → generated document detail (protected, inside AppShell)
+/audit-logs    → audit log list (protected, inside AppShell)
 *              → not found
 ```
 
@@ -416,9 +475,19 @@ successful blob download + safe failure), and PDF generation + download
 fallback + 404; page: Generate/Download PDF button appearance from
 `storage.pdf`, PDF generation loading + duplicate prevention + success + state
 refresh + 403/503 failures, independent DOCX/PDF loading, PDF download loading
-+ success + safe failure), plus protected routing for `/templates`,
-`/templates/new`, `/templates/:templateId`, `/documents`, `/documents/new`, and
-`/documents/:documentId`.
++ success + safe failure), the audit logs slice: the audit logs API module
+(endpoint, `?page=` / `?page_size=` / exact-match and timestamp-bound filter
+params, envelope preservation, no `company_id`, typed errors incl. 400 for
+rejected filter values), the audit logs list page (loading, data rendering,
+count, empty state, error/retry, 403 access-denied, out-of-range-page 404 with
+a back action, 429, pagination incl. URL state and loading during page
+changes), the audit logs filters (all six backend-supported controls with
+accessible labels, 250 ms debounce, URL persistence, filter-change resets
+page 1, paging preserves filters, clear-filters action, filter-specific empty
+state, filtered-error retry with preserved filter values, no invented
+search/filter/write controls), plus protected routing for `/templates`,
+`/templates/new`, `/templates/:templateId`, `/documents`, `/documents/new`,
+`/documents/:documentId`, and `/audit-logs`.
 
 ## Known limitations
 
@@ -433,8 +502,10 @@ refresh + 403/503 failures, independent DOCX/PDF loading, PDF download loading
   `document_templates.read`, and `generated_documents.read` backend
   permissions; unauthorized sections show a safe error state rather than the
   data. (The full client CRUD likewise requires the matching `clients.*`
-  permissions, and the template operations require the corresponding
-  `document_templates.*` / `document_templates.version_*` permissions.)
+ permissions, and the template operations require the corresponding
+ `document_templates.*` / `document_templates.version_*` permissions. The audit
+ logs list requires the `audit_logs.read` backend permission; without it the
+ page shows a safe access-denied state.)
 - The template and client lists are not paginated (the backend returns plain
   arrays).
 - The generated documents list is **not** paginated and supports **no**
@@ -443,6 +514,12 @@ refresh + 403/503 failures, independent DOCX/PDF loading, PDF download loading
 - The generated-document list and detail serializers expose only `client_id`
   and `template_id` (no client/template names), so those are shown as
   `Client #<id>` / `Template #<id>` links to the existing detail routes.
+- The audit logs list shows no `previous_values` / `new_values` / `user_agent`
+  columns (row payloads, not list columns) and no free-text search, ordering
+  control, detail, or export actions — the backend supports none of these;
+  filtering is limited to the six backend-accepted parameters
+  (`action`, `entity_type`, `entity_id`, `user_id`, `created_after`,
+  `created_before`).
 - Document creation requires the company to have an **active document template
   with an active version** for the chosen document type and a currency for the
   initial version — otherwise the backend rejects creation with a clear

@@ -84,6 +84,11 @@ describe('App', () => {
       if (url.includes('/reference-data/currencies/')) {
         return Promise.resolve(jsonResponse(200, []))
       }
+      if (url.includes('/audit-logs/')) {
+        return Promise.resolve(
+          jsonResponse(200, { count: 0, next: null, previous: null, results: [] }),
+        )
+      }
       return Promise.resolve(jsonResponse(200, {}))
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -258,6 +263,40 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: /clients/i })).toBeInTheDocument()
     // The empty backend client list produces the empty state (no fabricated rows).
     expect(await screen.findByText('No clients yet.')).toBeInTheDocument()
+  })
+
+  it('redirects unauthenticated users away from the audit logs route', async () => {
+    const { unmount } = renderAt('/audit-logs')
+    expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument()
+    unmount()
+  })
+
+  it('renders the audit logs list inside the protected shell for authenticated users', async () => {
+    setAccessToken('token-1')
+    stubBackend()
+
+    renderAt('/audit-logs')
+
+    expect(
+      await screen.findByRole('navigation', { name: /main navigation/i }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /audit logs/i })).toBeInTheDocument()
+    // The empty backend audit log envelope produces the empty state (no fabricated rows).
+    expect(await screen.findByText('No audit logs found.')).toBeInTheDocument()
+  })
+
+  it('exposes the audit logs section in the main navigation', async () => {
+    setAccessToken('token-1')
+    stubBackend()
+    const user = userEvent.setup()
+    renderAt('/dashboard')
+
+    await screen.findByRole('heading', { name: /dashboard/i })
+    const auditLogsLink = screen.getByRole('link', { name: /audit logs/i })
+    expect(auditLogsLink).toHaveAttribute('href', '/audit-logs')
+
+    await user.click(auditLogsLink)
+    expect(await screen.findByText('No audit logs found.')).toBeInTheDocument()
   })
 
   it('renders a not-found page for unknown routes', async () => {
