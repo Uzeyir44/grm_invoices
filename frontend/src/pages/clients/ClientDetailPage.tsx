@@ -7,6 +7,7 @@ import { buttonClasses } from '../../components/ui/buttonClasses'
 import { PageContainer } from '../../components/ui/PageContainer'
 import { ApiError, HTTP_STATUS } from '../../types/api'
 import type { ClientDetail } from '../../types/client'
+import { ClientAddressesSection } from './ClientAddressesSection'
 
 type State =
   | { status: 'loading' }
@@ -25,7 +26,10 @@ function formatDate(iso: string): string {
  * Client detail (`GET /api/clients/:id/`). The backend intentionally returns
  * 404 for both nonexistent and cross-tenant clients, so both cases render the
  * same safe "not found" state. Deleting is a soft-delete backed by the real
- * `DELETE` endpoint and requires an explicit confirmation step.
+ * `DELETE` endpoint and requires an explicit confirmation step. Addresses are
+ * managed through the tenant-scoped nested endpoints in
+ * {@link ClientAddressesSection}; contacts and bank accounts remain
+ * read-only nested displays.
  */
 export function ClientDetailPage() {
   const { clientId } = useParams()
@@ -258,23 +262,7 @@ export function ClientDetailPage() {
           )}
         </section>
 
-        <section aria-label="Addresses">
-          <h2 className="mb-1 text-sm font-semibold text-slate-700">Addresses</h2>
-          {client.addresses.length === 0 ? (
-            <p className="text-sm text-slate-500">No addresses.</p>
-          ) : (
-            <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white text-sm">
-              {client.addresses.map((address) => (
-                <li key={address.id} className="px-4 py-2 text-slate-700">
-                  {address.line1}
-                  {address.city ? `, ${address.city}` : ''}
-                  {address.country_code ? ` (${address.country_code})` : ''}
-                  {address.is_primary ? ' · primary' : ''}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        <ClientAddressesSection clientId={client.id} />
 
         <section aria-label="Bank accounts">
           <h2 className="mb-1 text-sm font-semibold text-slate-700">Bank accounts</h2>

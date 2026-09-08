@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchCurrencies, fetchDocumentTypes } from './referenceData'
+import { fetchAddressTypes, fetchCurrencies, fetchDocumentTypes } from './referenceData'
 import { documentTypes, jsonResponse } from '../test/templateFixtures'
 
 const currencies = [
   { id: 1, code: 'AZN', name: 'Azerbaijani Manat', minor_unit: 2 },
   { id: 2, code: 'USD', name: 'US Dollar', minor_unit: 2 },
+]
+
+const addressTypes = [
+  { id: 1, code: 'legal' },
+  { id: 2, code: 'business' },
+  { id: 3, code: 'residential' },
 ]
 
 describe('referenceData API', () => {
@@ -40,5 +46,16 @@ describe('referenceData API', () => {
     expect(url).toBe('/api/reference-data/currencies/')
     expect(init.method).toBe('GET')
     expect(result).toEqual(currencies)
+  })
+
+  it('fetches address types from the address-type catalog endpoint', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, addressTypes))
+
+    const result = await fetchAddressTypes()
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/reference-data/address-types/')
+    expect(init.method).toBe('GET')
+    expect(result).toEqual(addressTypes)
   })
 })

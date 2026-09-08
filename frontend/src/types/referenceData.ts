@@ -17,3 +17,13 @@ export interface Currency {
   name: string
   minor_unit: number
 }
+
+/**
+ * `GET /api/reference-data/address-types/` populates client address-type
+ * selects (`{ id, code }`, ordered by `code`). The address serializer takes
+ * the type *id*; the read-only `address_type_code` comes back on the row.
+ */
+export interface AddressType {
+  id: number
+  code: string
+}

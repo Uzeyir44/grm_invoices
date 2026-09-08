@@ -118,6 +118,11 @@ company (the frontend never sends `company_id`).
 | `POST /api/clients/` | create (201) | `createClient(input)` |
 | `PATCH /api/clients/:id/` | partial update (200) | `updateClient(id, input)` |
 | `DELETE /api/clients/:id/` | **soft-delete** (204) | `deleteClient(id)` |
+| `GET /api/clients/:id/addresses/` | address list (plain array, **no pagination**) | `listClientAddresses(clientId)` |
+| `POST /api/clients/:id/addresses/` | create address (201) | `createClientAddress(clientId, input)` |
+| `PATCH /api/clients/:id/addresses/:addressId/` | partial address update (200) | `updateClientAddress(clientId, addressId, input)` |
+| `DELETE /api/clients/:id/addresses/:addressId/` | **physical** address delete (204) | `deleteClientAddress(clientId, addressId)` |
+| `GET /api/reference-data/address-types/` | address-type catalog for the form | `fetchAddressTypes()` |
 
 - **List** — search box (`search`), status and client-type filters, all mapped
   to the real backend query parameters and stored in the URL (refresh /
@@ -130,8 +135,20 @@ company (the frontend never sends `company_id`).
   `null`.
 - **Detail** (`/clients/:clientId`) — displays the client, subtype, and the
   read-only nested data already present in the detail response (contacts,
-  addresses, bank accounts). Nested *editing* uses separate backend endpoints
-  and is out of scope for this phase.
+  bank accounts). **Addresses** are managed through the dedicated nested
+  endpoints (`src/pages/clients/ClientAddressesSection.tsx`): the section
+  fetches its own collection (own loading/error/retry states), shows every
+  serializer field (street, city, region, postal code, country, type code,
+  primary marker), and supports add / edit / physical delete. The form uses
+  the real serializer fields — required `address_type` (from the
+  `address-types` reference-data catalog, never hardcoded) and `line1`,
+  optional line 2 / city / region / postal code (sent as `null` when empty),
+  `country_code` (omitted when empty so the backend default applies — it is
+  not nullable), and the `is_primary` flag (the backend allows only one
+  primary address per client and reports a field error otherwise). Mutations
+  refetch the collection; delete requires explicit inline confirmation.
+  Contacts and bank-account *editing* use separate backend endpoints and are
+  out of scope for this phase.
 - **Edit** (`/clients/:clientId/edit`) — pre-filled PATCH form. `client_type`
   is immutable (the backend enforces this), so it is shown disabled.
 - **Delete** — soft-delete with an explicit inline confirmation step; after
@@ -551,9 +568,11 @@ search/filter/write controls), plus protected routing for `/templates`,
   endpoints need a version id, so file availability (`storage.docx` /
   `storage.pdf`) is read from the versions list. There is no line-item/totals
   view yet (the detail serializer returns none).
-- Nested client editing (addresses / contacts / bank accounts) is a separate
-  later phase; this phase only displays the read-only data already returned by
-  the client detail endpoint.
+- Nested contact and bank-account editing is a separate later phase; the
+  client detail page only displays the read-only data already returned by the
+  client detail endpoint for those. (Address editing is implemented via the
+  dedicated nested endpoints; unlike client soft-delete, address deletion is
+  a physical child-row delete on the backend.)
 - The template file **remove-only** endpoint (`DELETE .../file/`, which clears
   the current file without deleting the template) exists on the backend but is
   not surfaced as a UI action in this phase.

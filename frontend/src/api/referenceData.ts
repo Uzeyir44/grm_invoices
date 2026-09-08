@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { Currency, DocumentType } from '../types/referenceData'
+import type { AddressType, Currency, DocumentType } from '../types/referenceData'
 
 /**
  * Read-only reference-data catalog API slice, built on the generic
@@ -10,6 +10,8 @@ import type { Currency, DocumentType } from '../types/referenceData'
  *     (`{ id, code, name }`), ordered by `code`.
  *   * `GET /reference-data/currencies/` → array of `Currency`
  *     (`{ id, code, name, minor_unit }`), ordered by `code`.
+ *   * `GET /reference-data/address-types/` → array of `AddressType`
+ *     (`{ id, code }`), ordered by `code`.
  */
 export function fetchDocumentTypes(): Promise<DocumentType[]> {
   return apiClient.get<DocumentType[]>('/reference-data/document-types/')
@@ -17,4 +19,8 @@ export function fetchDocumentTypes(): Promise<DocumentType[]> {
 
 export function fetchCurrencies(): Promise<Currency[]> {
   return apiClient.get<Currency[]>('/reference-data/currencies/')
+}
+
+export function fetchAddressTypes(): Promise<AddressType[]> {
+  return apiClient.get<AddressType[]>('/reference-data/address-types/')
 }

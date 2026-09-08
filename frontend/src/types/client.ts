@@ -8,6 +8,13 @@
  * * `PATCH /api/clients/:id/`  → `ClientDetail` (200, partial update)
  * * `DELETE /api/clients/:id/` → 204 (soft-delete: sets `deleted_at`)
  *
+ * Nested addresses (`ClientAddressSerializer`, tenant- and parent-scoped):
+ * * `GET /api/clients/:id/addresses/`          → array of `ClientAddress`
+ *                                                  (plain array, no pagination)
+ * * `POST /api/clients/:id/addresses/`         → `ClientAddress` (201)
+ * * `PATCH /api/clients/:id/addresses/:aid/`   → `ClientAddress` (200, partial)
+ * * `DELETE /api/clients/:id/addresses/:aid/`  → 204 (physical child delete)
+ *
  * The list response carries no pagination metadata: the backend returns the
  * caller's company-scoped clients as a plain array.
  */
@@ -109,6 +116,28 @@ export interface ClientCreateInput {
 }
 
 export type ClientUpdateInput = Partial<ClientCreateInput>
+
+/**
+ * Address inputs accepted by the nested address serializer
+ * (`ClientAddressSerializer`). Writable fields only: `id` and
+ * `address_type_code` are read-only. `address_type` is the AddressType id
+ * (required on create); `line1` is required; `country_code` falls back to
+ * the backend default (`AZ`) when omitted — it is not nullable, so an empty
+ * value must be omitted rather than sent as `null`.
+ */
+export interface ClientAddressInput {
+  address_type: number
+  line1: string
+  line2?: string | null
+  city?: string | null
+  region?: string | null
+  postal_code?: string | null
+  country_code?: string | null
+  is_primary?: boolean
+}
+
+/** Partial update accepted by `PATCH /api/clients/:id/addresses/:aid/`. */
+export type ClientAddressUpdateInput = Partial<ClientAddressInput>
 
 /** Backend-supported list query parameters (`GET /api/clients/`). */
 export interface ClientsListParams {

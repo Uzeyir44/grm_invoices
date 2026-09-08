@@ -1,5 +1,8 @@
 import { apiClient } from './client'
 import type {
+  ClientAddress,
+  ClientAddressInput,
+  ClientAddressUpdateInput,
   ClientCreateInput,
   ClientDetail,
   ClientSummary,
@@ -18,9 +21,19 @@ import type {
  *   * `POST   /clients/`      → create → `ClientDetail` (201)
  *   * `PATCH  /clients/:id/`  → partial update → `ClientDetail` (200)
  *   * `DELETE /clients/:id/`  → soft-delete → 204
+ *   * `GET    /clients/:id/addresses/`            → array of `ClientAddress`
+ *                               (plain array, no pagination)
+ *   * `POST   /clients/:id/addresses/`            → create → `ClientAddress`
+ *                               (201). GET needs `clients.read`; POST needs
+ *                               `clients.update`.
+ *   * `PATCH  /clients/:id/addresses/:aid/`      → partial update →
+ *                               `ClientAddress` (200, needs `clients.update`)
+ *   * `DELETE /clients/:id/addresses/:aid/`      → physical child delete →
+ *                               204 (needs `clients.update`)
  *
  * The company is always the authenticated user's company; no `company_id` is
- * ever sent from the client.
+ * ever sent from the client. Nested rows are scoped by company *and* parent
+ * client — a missing or cross-tenant client/address is a backend 404.
  */
 
 export function listClients(params: ClientsListParams = {}): Promise<ClientSummary[]> {
@@ -51,4 +64,31 @@ export function updateClient(id: number, input: ClientUpdateInput): Promise<Clie
 
 export function deleteClient(id: number): Promise<void> {
   return apiClient.delete<void>(`/clients/${id}/`)
+}
+
+/** List a client's addresses (`GET /clients/:id/addresses/`, plain array). */
+export function listClientAddresses(clientId: number): Promise<ClientAddress[]> {
+  return apiClient.get<ClientAddress[]>(`/clients/${clientId}/addresses/`)
+}
+
+/** Create an address for a client (`POST /clients/:id/addresses/` → 201). */
+export function createClientAddress(
+  clientId: number,
+  input: ClientAddressInput,
+): Promise<ClientAddress> {
+  return apiClient.post<ClientAddress>(`/clients/${clientId}/addresses/`, input)
+}
+
+/** Partially update an address (`PATCH /clients/:id/addresses/:aid/`). */
+export function updateClientAddress(
+  clientId: number,
+  addressId: number,
+  input: ClientAddressUpdateInput,
+): Promise<ClientAddress> {
+  return apiClient.patch<ClientAddress>(`/clients/${clientId}/addresses/${addressId}/`, input)
+}
+
+/** Physically delete an address (`DELETE /clients/:id/addresses/:aid/` → 204). */
+export function deleteClientAddress(clientId: number, addressId: number): Promise<void> {
+  return apiClient.delete<void>(`/clients/${clientId}/addresses/${addressId}/`)
 }
