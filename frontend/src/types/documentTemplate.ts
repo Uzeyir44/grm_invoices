@@ -10,6 +10,7 @@
  *                                          `is_active` only)
  * * `DELETE /api/document-templates/:id/` → 204 (soft-delete)
  * * `GET /api/document-templates/:id/versions/` → array of `TemplateVersion`
+ * * `GET /api/document-templates/:id/versions/:vid/` → `TemplateVersion`
  * * `POST /api/document-templates/:id/versions/` → `TemplateVersion` (201)
  * * `POST /api/document-templates/:id/versions/:vid/activate/`
  *                                    → `TemplateVersion` (single active version)

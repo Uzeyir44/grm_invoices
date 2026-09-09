@@ -6,6 +6,7 @@ import {
   deleteTemplate,
   downloadTemplateFile,
   getTemplate,
+  getTemplateVersion,
   listTemplateVersions,
   listTemplates,
   updateTemplate,
@@ -121,6 +122,25 @@ describe('templates API', () => {
     expect(url).toBe('/api/document-templates/1/versions/')
     expect(init.method).toBe('GET')
     expect(result).toEqual(templateVersions)
+  })
+
+  it('fetches a single version from the version detail endpoint', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, activeTemplateVersion))
+
+    const result = await getTemplateVersion(1, 11)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/document-templates/1/versions/11/')
+    expect(init.method).toBe('GET')
+    expect(init.body).toBeUndefined()
+    expect(result).toEqual(activeTemplateVersion)
+  })
+
+  it('propagates backend errors from the version detail endpoint', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(404, { detail: 'Not found.' }))
+
+    // A missing, cross-tenant, or template-mismatched version is a 404.
+    await expect(getTemplateVersion(1, 999)).rejects.toMatchObject({ status: 404 })
   })
 
   it('creates a version snapshotting the current file', async () => {

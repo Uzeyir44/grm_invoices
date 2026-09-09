@@ -34,6 +34,11 @@ import type {
  *   * `DELETE /document-templates/:id/file/`  → remove the file → 204
  *   * `GET    /document-templates/:id/versions/` → array of `TemplateVersion`,
  *                                          ordered by `version_number`
+ *   * `GET    /document-templates/:id/versions/:versionId/`
+ *                                          → single `TemplateVersion`
+ *                                          (tenant-scoped; the version must
+ *                                          belong to the template, otherwise
+ *                                          404)
  *   * `POST   /document-templates/:id/versions/` → snapshot the current file as
  *                                          a new version (auto-activated) → 201
  *   * `POST   /document-templates/:id/versions/:versionId/activate/`
@@ -128,6 +133,21 @@ export async function downloadTemplateFile(id: number): Promise<TemplateDownload
 
 export function listTemplateVersions(id: number): Promise<TemplateVersion[]> {
   return apiClient.get<TemplateVersion[]>(`/document-templates/${id}/versions/`)
+}
+
+/**
+ * Retrieve a single immutable version
+ * (`GET /api/document-templates/:templateId/versions/:versionId/` → 200).
+ *
+ * The backend response is the read-only `TemplateVersionSerializer`; the
+ * lookup is tenant-scoped and constrained to the parent template, so a
+ * missing, cross-tenant, or mismatched version surfaces as 404. This is a
+ * pure GET — no tenant/company identifiers are ever sent.
+ */
+export function getTemplateVersion(templateId: number, versionId: number): Promise<TemplateVersion> {
+  return apiClient.get<TemplateVersion>(
+    `/document-templates/${templateId}/versions/${versionId}/`,
+  )
 }
 
 export function createTemplateVersion(id: number): Promise<TemplateVersion> {

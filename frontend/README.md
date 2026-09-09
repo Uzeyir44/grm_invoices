@@ -28,8 +28,8 @@ Implemented so far:
   pagination — the backend supports none).
 - **Document templates vertical slice** (Phase 5): template list with a
   document-type filter, create, detail (metadata, current file, upload/replace,
-  download, version history, create/activate version), metadata editing, and
-  soft-delete.
+  download, version history, create/activate version, per-version detail links),
+  metadata editing, read-only version detail, and soft-delete.
 - **Clients vertical slice** (Phase 4): client list with search/filters, create,
   detail (with read-only nested data), edit, and soft-delete confirmation.
 - **Application shell + dashboard** (Phase 3): authenticated shell (responsive
@@ -207,6 +207,7 @@ the authenticated user's company (the frontend never sends `company_id`).
 | `POST /api/document-templates/:id/file/` | upload / replace the `.docx` (201) | `uploadTemplateFile(id, file)` |
 | `DELETE /api/document-templates/:id/file/` | remove the file (204) | `deleteTemplateFile(id)` |
 | `GET /api/document-templates/:id/versions/` | version list | `listTemplateVersions(id)` |
+| `GET /api/document-templates/:id/versions/:vid/` | **version detail** | `getTemplateVersion(id, vid)` |
 | `POST /api/document-templates/:id/versions/` | create a version from the current file (201) | `createTemplateVersion(id)` |
 | `POST /api/document-templates/:id/versions/:vid/activate/` | activate a version | `activateTemplateVersion(id, vid)` |
 | `GET /api/reference-data/document-types/` | document-type catalog for the form/filter | `fetchDocumentTypes()` |
@@ -257,6 +258,19 @@ the authenticated user's company (the frontend never sends `company_id`).
   explicit confirmation step, then refetches the versions so the single-active
   invariant always reflects the server. A failed version section never takes
   down the rest of the page.
+- **Version detail** (`/templates/:templateId/versions/:versionId`) — a
+  strictly read-only page showing the backend `TemplateVersionSerializer`
+  fields (version number, active status, file basename, file-stored flag,
+  checksum, creator, created date, version/template IDs) fetched via
+  `GET /api/document-templates/:id/versions/:vid/`. Every version-history row
+  on the template detail page links there ("View details") without disturbing
+  activation or the other file/version actions. The lookup is tenant-scoped
+  and constrained to the parent template, so missing, cross-tenant, or
+  mismatched versions render one safe "Version not found" state; 403 / 429 /
+  generic failures render the existing safe error states with retry. The page
+  issues no PATCH/POST/DELETE and offers no file download (the backend
+  exposes no version-file download — only the template's current file is
+  downloadable from the template detail page).
 - **Delete** — soft-delete with an explicit inline confirmation step; after
   success the app returns to the template list. (Removing just the *file* — not
   the row — is a separate `DELETE .../file/` operation supported by the backend
@@ -500,6 +514,7 @@ trigger the refresh flow.
 /templates/new → create template (protected, inside AppShell)
 /templates/:templateId → template detail (protected, inside AppShell)
 /templates/:templateId/edit → edit template metadata (protected, inside AppShell)
+/templates/:templateId/versions/:versionId → template version detail (protected, inside AppShell)
 /documents     → generated document list (protected, inside AppShell)
 /documents/new → create generated document (protected, inside AppShell)
 /documents/:documentId → generated document detail (protected, inside AppShell)
@@ -524,7 +539,7 @@ the clients API module, the client list / create / detail / edit pages
 (loading, success, empty, error/retry, validation, delete confirmation,
 navigation, and URL search/filter behavior), the document-templates slice:
 the templates + reference-data API modules (methods, bodies, partial PATCH
-update incl. validation-error surfacing, FormData upload,
+update incl. validation-error surfacing, version detail GET, FormData upload,
 query params, binary download), the template list (loading / data / empty /
 error/retry / document-type filter / navigation), the create form (fields,
 validation, success, backend errors, duplicate-submission guard, redirect), the
@@ -537,7 +552,11 @@ between templates), the edit page (pre-filled metadata, read-only information,
 required-field validation, PATCH body incl. no `company_id`, success redirect
 to the detail page, cancel without saving, duplicate-submission guard,
 backend field / generic / 403 / 404 / 429 errors with preserved values,
-load-error retry, stale-response protection), and the generated
+load-error retry, stale-response protection), the version detail page
+(read-only serializer fields incl. absent-file fallbacks, loading, 403 / 404 /
+429 / generic error + retry, invalid ids without fetching, back navigation,
+stale-response protection, no-mutation guarantee, opening from the template
+detail version list alongside the untouched activation action), and the generated
 documents slice: the documents API module (endpoint, no query params, detail,
 create payload incl. no `company_id`, typed errors), the reference-data
 currency API, the documents list page (loading, data rendering, count, empty
@@ -571,7 +590,8 @@ accessible labels, 250 ms debounce, URL persistence, filter-change resets
 page 1, paging preserves filters, clear-filters action, filter-specific empty
 state, filtered-error retry with preserved filter values, no invented
 search/filter/write controls), plus protected routing for `/templates`,
-`/templates/new`, `/templates/:templateId`, `/templates/:templateId/edit`, `/documents`, `/documents/new`,
+`/templates/new`, `/templates/:templateId`, `/templates/:templateId/edit`,
+`/templates/:templateId/versions/:versionId`, `/documents`, `/documents/new`,
 `/documents/:documentId`, and `/audit-logs`.
 
 ## Known limitations

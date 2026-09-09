@@ -60,7 +60,9 @@ function uploadErrorFor(error: unknown): string {
  * section (e.g. the version history) never takes down the whole page.
  * Metadata editing lives on `/templates/:templateId/edit`; after a successful
  * edit the router carries `location.state.templateUpdated` so this page can
- * show a confirmation notice. Detail and version fetches are sequence-guarded
+ * show a confirmation notice. Each version-history row links to the read-only
+ * version detail page (`/templates/:templateId/versions/:versionId`).
+ * Detail and version fetches are sequence-guarded
  * so a stale in-flight response can never overwrite newer template state.
  */
 export function TemplateDetailPage() {
@@ -563,43 +565,51 @@ function versionErrorMessage(error: unknown): string {
                             {formatDate(version.created_at)}
                           </td>
                           <td className="px-4 py-3 text-slate-600">
-                            {version.is_active ? (
-                              <span className="text-xs text-slate-400">Current version</span>
-                            ) : confirmActivateId === version.id ? (
-                              <span className="flex flex-wrap items-center gap-2">
-                                <span className="text-slate-700">Make this the active version?</span>
+                            <span className="flex flex-wrap items-center gap-2">
+                              {version.is_active ? (
+                                <span className="text-xs text-slate-400">Current version</span>
+                              ) : confirmActivateId === version.id ? (
+                                <span className="flex flex-wrap items-center gap-2">
+                                  <span className="text-slate-700">Make this the active version?</span>
+                                  <Button
+                                    variant="secondary"
+                                    loading={activatingId === version.id}
+                                    loadingLabel="Activating…"
+                                    disabled={activatingId !== null}
+                                    onClick={() => handleActivate(version.id)}
+                                  >
+                                    Activate
+                                  </Button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setConfirmActivateId(null)
+                                      setActivationError(undefined)
+                                    }}
+                                    className="text-sm text-slate-600 underline hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-500"
+                                  >
+                                    Cancel
+                                  </button>
+                                </span>
+                              ) : (
                                 <Button
                                   variant="secondary"
-                                  loading={activatingId === version.id}
-                                  loadingLabel="Activating…"
                                   disabled={activatingId !== null}
-                                  onClick={() => handleActivate(version.id)}
+                                  onClick={() => {
+                                    setConfirmActivateId(version.id)
+                                    setActivationError(undefined)
+                                  }}
                                 >
                                   Activate
                                 </Button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setConfirmActivateId(null)
-                                    setActivationError(undefined)
-                                  }}
-                                  className="text-sm text-slate-600 underline hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-500"
-                                >
-                                  Cancel
-                                </button>
-                              </span>
-                            ) : (
-                              <Button
-                                variant="secondary"
-                                disabled={activatingId !== null}
-                                onClick={() => {
-                                  setConfirmActivateId(version.id)
-                                  setActivationError(undefined)
-                                }}
+                              )}
+                              <Link
+                                to={`/templates/${template.id}/versions/${version.id}`}
+                                className="text-sm text-slate-600 underline hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-500"
                               >
-                                Activate
-                              </Button>
-                            )}
+                                View details
+                              </Link>
+                            </span>
                           </td>
                         </tr>
                       )
