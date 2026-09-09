@@ -22,7 +22,7 @@ from apps.reference_data.models import DocumentType, Currency
 
 
 def make_document_type(code="invoice"):
-    return DocumentType.objects.create(code=code, name="Invoice")
+    return DocumentType.objects.get_or_create(code=code, defaults={"name": "Invoice"})[0]
 
 
 def make_template(company, document_type):

@@ -170,8 +170,9 @@ class SeedCatalogTests(TestCase):
     def test_catalogs_without_canonical_definitions_are_not_seeded(self):
         # No authoritative canonical values are defined (yet) for these
         # catalogs, so a migration-built database must contain no rows for
-        # them. No values are invented.
-        for model_class in (Currency, DocumentType, VatRate, Bank):
+        # them. No values are invented. (Document types do have canonical
+        # values — see 0003_seed_document_types and SeededDocumentTypeTests.)
+        for model_class in (Currency, VatRate, Bank):
             self.assertEqual(
                 model_class.objects.count(),
                 0,
@@ -294,10 +295,12 @@ class ReferenceDataCatalogTests(ReferenceDataApiTestCase):
         )
 
     def test_currently_unseeded_catalogs_return_empty_without_fabricating_data(self):
+        # Document types are seeded (0003_seed_document_types) and covered by
+        # SeededDocumentTypeTests below; the remaining catalogs are still
+        # unseeded and must return an empty list without fabricating data.
         for name in (
             "reference-bank-list",
             "reference-currency-list",
-            "reference-document-type-list",
             "reference-vat-rate-list",
             "reference-exchange-rate-list",
         ):
@@ -307,7 +310,6 @@ class ReferenceDataCatalogTests(ReferenceDataApiTestCase):
         # Nothing was fabricated.
         self.assertEqual(Bank.objects.count(), 0)
         self.assertEqual(Currency.objects.count(), 0)
-        self.assertEqual(DocumentType.objects.count(), 0)
         self.assertEqual(VatRate.objects.count(), 0)
         self.assertEqual(ExchangeRate.objects.count(), 0)
 
@@ -330,6 +332,77 @@ class ReferenceDataCatalogTests(ReferenceDataApiTestCase):
 
         declared = set(ExchangeRateSerializer.Meta.fields)
         self.assertEqual(declared, serializer_fields)
+
+
+class SeededDocumentTypeTests(ReferenceDataApiTestCase):
+    """
+    Coverage for the 0003_seed_document_types data migration: the document
+    type catalog is seeded (unlike the other catalogs), shared across
+    companies, ordered by code, and the migration is idempotent with a
+    reverse that removes only the seeded rows.
+    """
+
+    SEEDED = {
+        "consulting_contract": "Consulting Contract",
+        "purchase_sale_contract": "Purchase/Sale Contract",
+        "invoice": "Invoice",
+        "handover_certificate": "Handover Certificate",
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.grant(self.user, *self.READ)
+        self.grant(self.other_user, *self.READ)
+
+    def test_seeded_document_types_exist_with_exact_names(self):
+        rows = {row.code: row.name for row in DocumentType.objects.all()}
+        for code, name in self.SEEDED.items():
+            self.assertEqual(rows.get(code), name, code)
+        self.assertEqual(DocumentType.objects.count(), len(self.SEEDED))
+
+    def test_catalog_endpoint_returns_seeded_types_ordered_by_code(self):
+        self.auth(self.user)
+        response = self.client.get(self.list_url("reference-document-type-list"))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rows = response.json()
+        self.assertEqual([row["code"] for row in rows], sorted(self.SEEDED))
+        self.assertEqual(
+            [(row["code"], row["name"]) for row in rows],
+            [(code, self.SEEDED[code]) for code in sorted(self.SEEDED)],
+        )
+        for row in rows:
+            self.assertEqual(set(row.keys()), {"id", "code", "name"})
+
+    def test_seeded_catalog_is_shared_across_companies(self):
+        self.auth(self.user)
+        a_codes = [row["code"] for row in self.client.get(
+            self.list_url("reference-document-type-list")
+        ).json()]
+        self.auth(self.other_user)
+        b_codes = [row["code"] for row in self.client.get(
+            self.list_url("reference-document-type-list")
+        ).json()]
+        self.assertEqual(a_codes, b_codes)
+        self.assertEqual(a_codes, sorted(self.SEEDED))
+
+    def test_seed_migration_is_idempotent(self):
+        from importlib import import_module
+
+        migration = import_module("apps.reference_data.migrations.0003_seed_document_types")
+        migration.seed_document_types(apps, None)
+        migration.seed_document_types(apps, None)
+        self.assertEqual(DocumentType.objects.count(), len(self.SEEDED))
+        for code, name in self.SEEDED.items():
+            self.assertEqual(DocumentType.objects.get(code=code).name, name)
+
+    def test_reverse_migration_removes_only_seeded_types(self):
+        from importlib import import_module
+
+        DocumentType.objects.create(code="contract", name="Contract")
+        migration = import_module("apps.reference_data.migrations.0003_seed_document_types")
+        migration.unseed_document_types(apps, None)
+        remaining = {row.code for row in DocumentType.objects.all()}
+        self.assertEqual(remaining, {"contract"})
 
 
 class ReferenceDataReadOnlyTests(ReferenceDataApiTestCase):
@@ -398,7 +471,9 @@ class ReferenceDataBusinessValidationTests(APITestCase):
         self.address_type = AddressType.objects.get(code="legal")
         self.bank = Bank.objects.create(name="Test Bank")
         self.currency = Currency.objects.create(code="AZN", name="Manat")
-        self.document_type = DocumentType.objects.create(code="invoice", name="Invoice")
+        self.document_type, _ = DocumentType.objects.get_or_create(
+            code="invoice", defaults={"name": "Invoice"}
+        )
 
         self.client_a = self._make_client(self.company_a, "Acme A")
         self.client_b = self._make_client(self.company_b, "Acme B")

@@ -65,7 +65,9 @@ class GeneratedDocumentAuditTestCase(APITestCase):
         self.user = make_user(self.company, email="alice@example.com")
         self.other_company = make_company()
         self.other_user = make_user(self.other_company, email="bob@example.com")
-        self.document_type = DocumentType.objects.create(code="invoice", name="Invoice")
+        self.document_type, _ = DocumentType.objects.get_or_create(
+            code="invoice", defaults={"name": "Invoice"}
+        )
         self.currency = Currency.objects.get_or_create(code="AZN", name="Manat")[0]
         self.template = DocumentTemplate.objects.create(
             company=self.company, document_type=self.document_type, name="Invoice Template"

@@ -45,7 +45,9 @@ class GenerationServiceTestCase(TestCase):
 
     def setUp(self):
         self.company = make_company()
-        self.document_type = DocumentType.objects.create(code="invoice", name="Invoice")
+        self.document_type, _ = DocumentType.objects.get_or_create(
+            code="invoice", defaults={"name": "Invoice"}
+        )
         self.template = DocumentTemplate.objects.create(
             company=self.company,
             document_type=self.document_type,

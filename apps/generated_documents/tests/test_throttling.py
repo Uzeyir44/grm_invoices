@@ -37,7 +37,9 @@ class GeneratedDocumentThrottlingTestCase(APITestCase):
         self.company_b = make_company()
         self.alice = make_user(self.company_a, email="alice@example.com")
         self.carol = make_user(self.company_b, email="carol@example.com")
-        self.document_type = DocumentType.objects.create(code="invoice", name="Invoice")
+        self.document_type, _ = DocumentType.objects.get_or_create(
+            code="invoice", defaults={"name": "Invoice"}
+        )
         self.currency = Currency.objects.get_or_create(code="AZN", name="Manat")[0]
         self.template_a, self.template_version_a = self._make_template(self.company_a)
         self.template_b, _ = self._make_template(self.company_b)

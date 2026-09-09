@@ -26,11 +26,13 @@ class DocumentTemplateAPITestCase(APITestCase):
         self.alice = make_user(self.company_a, email="alice@example.com")
         self.bob = make_user(self.company_a, email="bob@example.com")
         self.carol = make_user(self.company_b, email="carol@example.com")
-        self.invoice_type = DocumentType.objects.create(
-            code="invoice", name="Invoice"
+        # The seeded catalog (0003_seed_document_types) already provides these
+        # codes; get_or_create keeps this suite green with or without the seed.
+        self.invoice_type, _ = DocumentType.objects.get_or_create(
+            code="invoice", defaults={"name": "Invoice"}
         )
-        self.contract_type = DocumentType.objects.create(
-            code="consulting_contract", name="Consulting Contract"
+        self.contract_type, _ = DocumentType.objects.get_or_create(
+            code="consulting_contract", defaults={"name": "Consulting Contract"}
         )
 
     def grant(self, user, *codes):

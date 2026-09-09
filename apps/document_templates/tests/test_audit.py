@@ -51,7 +51,9 @@ class TemplateAuditTestCase(APITestCase):
     def setUp(self):
         self.company = make_company()
         self.user = make_user(self.company, email="alice@example.com")
-        self.document_type = DocumentType.objects.create(code="invoice", name="Invoice")
+        self.document_type, _ = DocumentType.objects.get_or_create(
+            code="invoice", defaults={"name": "Invoice"}
+        )
         self.grant(self.user, *PERMS)
         self.auth(self.user)
 

@@ -44,7 +44,9 @@ class GeneratedDocumentRequestLimitTestCase(APITestCase):
         self.company_b = make_company()
         self.alice = make_user(self.company_a, email="alice@example.com")
         self.carol = make_user(self.company_b, email="carol@example.com")
-        self.document_type = DocumentType.objects.create(code="invoice", name="Invoice")
+        self.document_type, _ = DocumentType.objects.get_or_create(
+            code="invoice", defaults={"name": "Invoice"}
+        )
         self.currency = Currency.objects.get_or_create(code="AZN", name="Manat")[0]
         self.template_a, _ = self._make_template(self.company_a)
         self.client_a = self._make_client(self.company_a, "Acme A")

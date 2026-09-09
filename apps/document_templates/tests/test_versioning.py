@@ -25,7 +25,9 @@ from apps.reference_data.models import DocumentType
 
 class TemplateVersionFixtureMixin:
     def _make_template(self, company):
-        document_type = DocumentType.objects.create(code="invoice", name="Invoice")
+        document_type, _ = DocumentType.objects.get_or_create(
+            code="invoice", defaults={"name": "Invoice"}
+        )
         template = DocumentTemplate.objects.create(
             company=company, document_type=document_type, name="Invoice Template"
         )
