@@ -441,4 +441,277 @@ describe('TemplateDetailPage', () => {
     expect(screen.getByRole('heading', { name: /Second Template/ })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: /Standard Invoice/ })).not.toBeInTheDocument()
   })
+
+  describe('file removal', () => {
+    const noFileDetail = { ...templateDetail, file: null, file_name: null }
+
+    function stubRemovalBackend(
+      onDelete?: (url: string) => Response | Promise<Response>,
+      afterDeleteDetail: unknown = noFileDetail,
+    ) {
+      let deleted = false
+      fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url === '/api/document-templates/1/file/' && method === 'DELETE') {
+          if (onDelete) return Promise.resolve(onDelete(url))
+          deleted = true
+          return Promise.resolve(new Response(null, { status: 204 }))
+        }
+        if (url === '/api/document-templates/1/' && method === 'GET') {
+          return Promise.resolve(jsonResponse(200, deleted ? afterDeleteDetail : templateDetail))
+        }
+        if (url.includes('/versions/')) {
+          return Promise.resolve(jsonResponse(200, templateVersions))
+        }
+        return Promise.resolve(jsonResponse(404, { detail: 'Not found.' }))
+      })
+    }
+
+    it('offers a remove-file action only when a file exists', async () => {
+      stubRemovalBackend()
+      renderDetail()
+      await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+      expect(screen.getByRole('button', { name: 'Remove file' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /download file/i })).toBeInTheDocument()
+    })
+
+    it('hides the remove action when there is no file but keeps upload available', async () => {
+      fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (url === '/api/document-templates/1/' && (init?.method ?? 'GET') === 'GET') {
+          return Promise.resolve(jsonResponse(200, noFileDetail))
+        }
+        if (url.includes('/versions/')) {
+          return Promise.resolve(jsonResponse(200, templateVersions))
+        }
+        return Promise.resolve(jsonResponse(404, { detail: 'Not found.' }))
+      })
+      renderDetail()
+      await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+      expect(screen.queryByRole('button', { name: 'Remove file' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /download file/i })).not.toBeInTheDocument()
+      expect(screen.getByText('No file uploaded yet.')).toBeInTheDocument()
+      expect(screen.getByTestId('upload-form')).toBeInTheDocument()
+    })
+
+    it('requires confirmation and cancels without any DELETE request', async () => {
+      stubRemovalBackend()
+      renderDetail()
+      await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+      await user.click(screen.getByRole('button', { name: 'Remove file' }))
+      expect(screen.getByText(/remove the current file/i)).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      expect(screen.queryByText(/remove the current file/i)).not.toBeInTheDocument()
+      const deleteCalls = fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url).endsWith('/file/') && (init as RequestInit)?.method === 'DELETE',
+      )
+      expect(deleteCalls).toHaveLength(0)
+    })
+
+    it('removes the file once, refreshes the detail, and shows a success notice', async () => {
+      stubRemovalBackend()
+      renderDetail()
+      await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+      await user.click(screen.getByRole('button', { name: 'Remove file' }))
+      await user.click(screen.getByRole('button', { name: 'Yes, remove file' }))
+
+      const deleteCalls = await waitFor(() => {
+        const calls = fetchMock.mock.calls.filter(
+          ([url, init]) =>
+            String(url) === '/api/document-templates/1/file/' &&
+            (init as RequestInit)?.method === 'DELETE',
+        )
+        expect(calls).toHaveLength(1)
+        return calls
+      })
+      expect(deleteCalls).toHaveLength(1)
+
+      // The detail is refetched from the backend (source of truth).
+      expect(await screen.findByRole('status')).toHaveTextContent(/file removed successfully/i)
+      expect(screen.getByText('No file uploaded')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Remove file' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /download file/i })).not.toBeInTheDocument()
+      // Upload/replace stays available for the next file.
+      expect(screen.getByTestId('upload-form')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /upload file/i })).toBeInTheDocument()
+    })
+
+    it('disables the destructive action and prevents duplicate DELETE requests', async () => {
+      let resolveDelete: (value: Response) => void = () => {}
+      stubRemovalBackend(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveDelete = resolve
+          }),
+      )
+      renderDetail()
+      await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+      await user.click(screen.getByRole('button', { name: 'Remove file' }))
+      await user.click(screen.getByRole('button', { name: 'Yes, remove file' }))
+
+      const removing = await screen.findByRole('button', { name: /removing/i })
+      expect(removing).toBeDisabled()
+      await user.click(removing)
+      const deleteCalls = fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url) === '/api/document-templates/1/file/' &&
+          (init as RequestInit)?.method === 'DELETE',
+      )
+      expect(deleteCalls).toHaveLength(1)
+
+      resolveDelete(new Response(null, { status: 204 }))
+      expect(await screen.findByRole('status')).toHaveTextContent(/file removed successfully/i)
+    })
+
+    it('keeps the file visible when removal is forbidden (403)', async () => {
+      stubRemovalBackend(() => jsonResponse(403, { detail: 'No permission.' }))
+      renderDetail()
+      await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+      await user.click(screen.getByRole('button', { name: 'Remove file' }))
+      await user.click(screen.getByRole('button', { name: 'Yes, remove file' }))
+
+      expect(
+        await screen.findByText(/do not have permission to update this template/i),
+      ).toBeInTheDocument()
+      // The file was not removed: info, actions, and retry stay available.
+      expect(screen.getByText('abc123.docx')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /download file/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Yes, remove file' })).toBeInTheDocument()
+    })
+
+    it('shows the backend message when there is no file to remove (404)', async () => {
+      stubRemovalBackend(() =>
+        jsonResponse(404, { detail: 'This template has no file uploaded yet.' }),
+      )
+      renderDetail()
+      await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+      await user.click(screen.getByRole('button', { name: 'Remove file' }))
+      await user.click(screen.getByRole('button', { name: 'Yes, remove file' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/no file uploaded yet/i)
+      expect(screen.getByText('abc123.docx')).toBeInTheDocument()
+    })
+
+    it('shows a friendly retry message for 429 with the backend Retry-After value', async () => {
+      stubRemovalBackend(
+        () =>
+          new Response(JSON.stringify({ detail: 'Request was throttled.' }), {
+            status: 429,
+            headers: { 'Content-Type': 'application/json', 'Retry-After': '6' },
+          }),
+      )
+      renderDetail()
+      await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+      await user.click(screen.getByRole('button', { name: 'Remove file' }))
+      await user.click(screen.getByRole('button', { name: 'Yes, remove file' }))
+
+      expect(await screen.findByText(/wait 6 seconds/i)).toBeInTheDocument()
+      expect(screen.getByText('abc123.docx')).toBeInTheDocument()
+    })
+
+    it('shows a safe generic error and allows retry after failure', async () => {
+      let attempts = 0
+      stubRemovalBackend(() => {
+        attempts += 1
+        if (attempts === 1) {
+          return new Response('Internal server error', { status: 500 })
+        }
+        return new Response(null, { status: 204 })
+      })
+      renderDetail()
+      await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+      await user.click(screen.getByRole('button', { name: 'Remove file' }))
+      await user.click(screen.getByRole('button', { name: 'Yes, remove file' }))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        /unexpected server error occurred/i,
+      )
+      expect(screen.getByText('abc123.docx')).toBeInTheDocument()
+
+      // Retry from the still-open confirmation succeeds.
+      await user.click(screen.getByRole('button', { name: 'Yes, remove file' }))
+      expect(await screen.findByRole('status')).toHaveTextContent(/file removed successfully/i)
+      expect(attempts).toBe(2)
+    })
+
+    it('never lets a late removal outcome overwrite a newer template', async () => {
+      const secondTemplate = {
+        ...templateDetail,
+        id: 2,
+        name: 'Second Template',
+        file: '/api/document-templates/2/file/',
+        file_name: 'templates/company_10/2/current/second.docx',
+      }
+      let resolveDelete: (value: Response) => void = () => {}
+      fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url === '/api/document-templates/1/file/' && method === 'DELETE') {
+          return new Promise<Response>((resolve) => {
+            resolveDelete = resolve
+          })
+        }
+        if (url === '/api/document-templates/1/' && method === 'GET') {
+          return Promise.resolve(jsonResponse(200, templateDetail))
+        }
+        if (url === '/api/document-templates/2/' && method === 'GET') {
+          return Promise.resolve(jsonResponse(200, secondTemplate))
+        }
+        if (url.includes('/versions/')) {
+          return Promise.resolve(jsonResponse(200, templateVersions))
+        }
+        return Promise.resolve(jsonResponse(404, { detail: 'Not found.' }))
+      })
+      function GoToSecond() {
+        const navigate = useNavigate()
+        return (
+          <button type="button" onClick={() => navigate('/templates/2')}>
+            Go to second
+          </button>
+        )
+      }
+      render(
+        <MemoryRouter initialEntries={['/templates/1']}>
+          <GoToSecond />
+          <Routes>
+            <Route path="/templates/:templateId" element={<TemplateDetailPage />} />
+            <Route path="/templates" element={<div data-testid="list-view" />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+      await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+      // Start removal, then navigate away while the DELETE is in flight.
+      await user.click(screen.getByRole('button', { name: 'Remove file' }))
+      await user.click(screen.getByRole('button', { name: 'Yes, remove file' }))
+      await user.click(screen.getByRole('button', { name: /go to second/i }))
+      expect(await screen.findByRole('heading', { name: /Second Template/ })).toBeInTheDocument()
+
+      // Template A's late DELETE success must not refresh over template B.
+      resolveDelete(new Response(null, { status: 204 }))
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+      expect(screen.getByRole('heading', { name: /Second Template/ })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: /Standard Invoice/ })).not.toBeInTheDocument()
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+      const refetchOfFirst = fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url) === '/api/document-templates/1/' && (init as RequestInit)?.method === 'GET',
+      )
+      // Only the initial mount fetch; no stale refresh after navigation.
+      expect(refetchOfFirst).toHaveLength(1)
+    })
+  })
 })

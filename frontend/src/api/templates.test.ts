@@ -4,6 +4,7 @@ import {
   createTemplate,
   createTemplateVersion,
   deleteTemplate,
+  deleteTemplateFile,
   downloadTemplateFile,
   getTemplate,
   getTemplateVersion,
@@ -111,6 +112,31 @@ describe('templates API', () => {
     const sentFile = (init.body as FormData).get('file')
     expect(sentFile).toBe(file)
     expect(result).toEqual({ id: 1, file_name: 'tpl.docx' })
+  })
+
+  it('removes only the file via DELETE and resolves on 204 with no body', async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }))
+
+    await expect(deleteTemplateFile(1)).resolves.toBeUndefined()
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/document-templates/1/file/')
+    expect(init.method).toBe('DELETE')
+    expect(init.body).toBeUndefined()
+  })
+
+  it('propagates the 404 when there is no file to remove', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(404, { detail: 'This template has no file uploaded yet.' }),
+    )
+
+    await expect(deleteTemplateFile(1)).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('propagates permission errors from the file removal endpoint', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(403, { detail: 'No permission.' }))
+
+    await expect(deleteTemplateFile(1)).rejects.toMatchObject({ status: 403 })
   })
 
   it('lists versions from the version list endpoint', async () => {

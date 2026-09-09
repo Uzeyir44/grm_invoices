@@ -5,6 +5,7 @@ import {
   activateTemplateVersion,
   createTemplateVersion,
   deleteTemplate,
+  deleteTemplateFile,
   downloadTemplateFile,
   getTemplate,
   listTemplateVersions,
@@ -52,6 +53,24 @@ function uploadErrorFor(error: unknown): string {
   return 'Could not upload the file.'
 }
 
+function removeFileErrorFor(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === HTTP_STATUS.FORBIDDEN) {
+      return 'You do not have permission to update this template.'
+    }
+    if (error.status === HTTP_STATUS.NOT_FOUND) {
+      return error.message || 'This template has no file to remove.'
+    }
+    if (error.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
+      return error.retryAfterSeconds !== null
+        ? `Too many attempts. Please wait ${error.retryAfterSeconds} seconds and try again.`
+        : 'Too many attempts. Please wait a moment and try again.'
+    }
+    return error.message || 'Could not remove the file.'
+  }
+  return 'Could not remove the file.'
+}
+
 /**
  * Template detail (`GET /api/document-templates/:id/`). The backend returns
  * 404 for both nonexistent and cross-tenant templates, so both render the same
@@ -62,6 +81,9 @@ function uploadErrorFor(error: unknown): string {
  * edit the router carries `location.state.templateUpdated` so this page can
  * show a confirmation notice. Each version-history row links to the read-only
  * version detail page (`/templates/:templateId/versions/:versionId`).
+ * The current file can be removed through `DELETE .../file/` after an
+ * explicit inline confirmation; the detail is then refetched from the backend
+ * and the upload form stays available for a replacement.
  * Detail and version fetches are sequence-guarded
  * so a stale in-flight response can never overwrite newer template state.
  */
@@ -81,6 +103,11 @@ export function TemplateDetailPage() {
 
   const [downloading, setDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState<string>()
+
+  const [confirmRemoveFile, setConfirmRemoveFile] = useState(false)
+  const [removingFile, setRemovingFile] = useState(false)
+  const [removeFileError, setRemoveFileError] = useState<string>()
+  const [removeFileSuccess, setRemoveFileSuccess] = useState(false)
 
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -103,6 +130,11 @@ export function TemplateDetailPage() {
   // current template may update state.
   const templateRequestRef = useRef(0)
   const versionsRequestRef = useRef(0)
+  // Latest route id, so late async continuations can tell whether their
+  // template is still current (e.g. a file-removal DELETE or refresh
+  // finishing after navigation to another template). Synced in an effect
+  // declared before the loading effects below.
+  const idRef = useRef(id)
 
   // The route moved to a different template: drop the previous template's
   // state immediately so stale metadata/versions are never shown for the new
@@ -114,6 +146,9 @@ export function TemplateDetailPage() {
     setState({ status: 'loading' })
     setVersions(null)
     setVersionsError(false)
+    setConfirmRemoveFile(false)
+    setRemoveFileError(undefined)
+    setRemoveFileSuccess(false)
   }
 
   const loadTemplate = useCallback(() => {
@@ -121,13 +156,16 @@ export function TemplateDetailPage() {
     // template state when navigating rapidly between detail routes (the same
     // race previously fixed in the Clients domain).
     const requestId = ++templateRequestRef.current
-    void getTemplate(id)
+    const requestTemplateId = id
+    void getTemplate(requestTemplateId)
       .then((data) => {
         if (templateRequestRef.current !== requestId) return
+        if (idRef.current !== requestTemplateId) return
         setState({ status: 'ready', data })
       })
       .catch((error: unknown) => {
         if (templateRequestRef.current !== requestId) return
+        if (idRef.current !== requestTemplateId) return
         if (error instanceof ApiError && error.status === HTTP_STATUS.NOT_FOUND) {
           setState({ status: 'notfound' })
         } else if (error instanceof ApiError && error.status === HTTP_STATUS.FORBIDDEN) {
@@ -140,16 +178,23 @@ export function TemplateDetailPage() {
 
   const loadVersions = useCallback(() => {
     const requestId = ++versionsRequestRef.current
-    void listTemplateVersions(id)
+    const requestTemplateId = id
+    void listTemplateVersions(requestTemplateId)
       .then((data) => {
         if (versionsRequestRef.current !== requestId) return
+        if (idRef.current !== requestTemplateId) return
         setVersions(data)
       })
       .catch(() => {
         if (versionsRequestRef.current !== requestId) return
+        if (idRef.current !== requestTemplateId) return
         setVersionsError(true)
       })
   }, [id])
+
+  useEffect(() => {
+    idRef.current = id
+  })
 
   useEffect(() => {
     if (Number.isNaN(id)) return
@@ -270,6 +315,28 @@ function versionErrorMessage(error: unknown): string {
       .finally(() => setDeleting(false))
   }
 
+  function handleRemoveFile() {
+    if (removingFile) return
+    // The template may change while the DELETE is in flight; only the
+    // still-current template may apply the outcome or refresh.
+    const requestTemplateId = id
+    setRemovingFile(true)
+    setRemoveFileError(undefined)
+    setRemoveFileSuccess(false)
+    void deleteTemplateFile(requestTemplateId)
+      .then(() => {
+        if (idRef.current !== requestTemplateId) return
+        setConfirmRemoveFile(false)
+        setRemoveFileSuccess(true)
+        loadTemplate()
+      })
+      .catch((error: unknown) => {
+        if (idRef.current !== requestTemplateId) return
+        setRemoveFileError(removeFileErrorFor(error))
+      })
+      .finally(() => setRemovingFile(false))
+  }
+
   if (Number.isNaN(id)) {
     return (
       <PageContainer title="Template">
@@ -353,14 +420,42 @@ function versionErrorMessage(error: unknown): string {
             Edit metadata
           </Link>
           {template.file ? (
-            <Button
-              variant="secondary"
-              onClick={handleDownload}
-              loading={downloading}
-              loadingLabel="Downloading…"
-            >
-              Download file
-            </Button>
+            <>
+              <Button
+                variant="secondary"
+                onClick={handleDownload}
+                loading={downloading}
+                loadingLabel="Downloading…"
+              >
+                Download file
+              </Button>
+              {!confirmRemoveFile ? (
+                <Button variant="danger" onClick={() => setConfirmRemoveFile(true)}>
+                  Remove file
+                </Button>
+              ) : (
+                <span className="flex flex-wrap items-center gap-3 text-sm text-slate-700">
+                  Remove the current file? The template itself stays.
+                  <Button
+                    variant="danger"
+                    loading={removingFile}
+                    loadingLabel="Removing…"
+                    onClick={handleRemoveFile}
+                  >
+                    Yes, remove file
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setConfirmRemoveFile(false)
+                      setRemoveFileError(undefined)
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </span>
+              )}
+            </>
           ) : (
             <span className="text-sm text-slate-500">No file uploaded yet.</span>
           )}
@@ -392,6 +487,16 @@ function versionErrorMessage(error: unknown): string {
             {downloadError}
           </p>
         ) : null}
+        {removeFileError ? (
+          <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+            {removeFileError}
+          </p>
+        ) : null}
+        {removeFileSuccess ? (
+          <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+            File removed successfully. You can upload a replacement below.
+          </p>
+        ) : null}
         {deleteError ? (
           <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
             {deleteError}
@@ -409,7 +514,7 @@ function versionErrorMessage(error: unknown): string {
           </div>
           <div>
             <dt className="text-slate-500">Current file</dt>
-            <dd className="text-slate-900">{fileName ?? 'No file uploaded'}</dd>
+            <dd className="break-words text-slate-900">{fileName ?? 'No file uploaded'}</dd>
           </div>
           <div>
             <dt className="text-slate-500">Created</dt>

@@ -28,8 +28,8 @@ Implemented so far:
   pagination — the backend supports none).
 - **Document templates vertical slice** (Phase 5): template list with a
   document-type filter, create, detail (metadata, current file, upload/replace,
-  download, version history, create/activate version, per-version detail links),
-  metadata editing, read-only version detail, and soft-delete.
+  download, file removal, version history, create/activate version, per-version
+  detail links), metadata editing, read-only version detail, and soft-delete.
 - **Clients vertical slice** (Phase 4): client list with search/filters, create,
   detail (with read-only nested data), edit, and soft-delete confirmation.
 - **Application shell + dashboard** (Phase 3): authenticated shell (responsive
@@ -206,6 +206,7 @@ the authenticated user's company (the frontend never sends `company_id`).
 | `GET /api/document-templates/:id/file/` | authenticated file download (binary) | `downloadTemplateFile(id)` |
 | `POST /api/document-templates/:id/file/` | upload / replace the `.docx` (201) | `uploadTemplateFile(id, file)` |
 | `DELETE /api/document-templates/:id/file/` | remove the file (204) | `deleteTemplateFile(id)` |
+| `DELETE /api/document-templates/:id/file/` | remove the file (204) | `deleteTemplateFile(id)` |
 | `GET /api/document-templates/:id/versions/` | version list | `listTemplateVersions(id)` |
 | `GET /api/document-templates/:id/versions/:vid/` | **version detail** | `getTemplateVersion(id, vid)` |
 | `POST /api/document-templates/:id/versions/` | create a version from the current file (201) | `createTemplateVersion(id)` |
@@ -251,6 +252,25 @@ the authenticated user's company (the frontend never sends `company_id`).
   sending and surfaces backend validation errors (size / not-a-valid-docx /
   forbidden) afterward. After a successful upload the template metadata and
   version history are refreshed from the backend.
+- **Remove file** — the detail page shows a **Remove file** action only when
+  the backend reports a current file (`file` non-null). It requires an
+  explicit inline confirmation ("Remove the current file? The template itself
+  stays." → **Yes, remove file** / **Cancel**; cancel sends no request) and
+  calls `DELETE /api/document-templates/:id/file/` (204, empty body — the
+  backend clears the database reference and deletes the stored file; the
+  template row itself is untouched). While removal is in flight the action is
+  disabled and duplicate DELETEs are prevented. On success the detail is
+  refetched from the backend (source of truth), a confirmation notice appears,
+  the file info/download/remove actions disappear, and the upload form stays
+  available for a replacement (`has file → remove → no file → upload`).
+  Failures (403 / 404 no-file / 429 with `Retry-After` / generic) keep the
+  existing file state visible with the action available for retry. Detail and
+  version refreshes are id-guarded so a late removal outcome can never
+  overwrite a newer template after navigation.
+- **Delete** — soft-delete with an explicit inline confirmation step; after
+  success the app returns to the template list. (Removing just the *file* — not
+  the row — is the `DELETE .../file/` operation above, surfaced as the
+  **Remove file** action on the detail page.)
 - **Versioning** — `POST .../versions/` snapshots the template's **current
   file** as a new immutable version (the new version becomes the active one, as
   the backend contract dictates — the frontend does not invent this). Version
@@ -273,8 +293,8 @@ the authenticated user's company (the frontend never sends `company_id`).
   downloadable from the template detail page).
 - **Delete** — soft-delete with an explicit inline confirmation step; after
   success the app returns to the template list. (Removing just the *file* — not
-  the row — is a separate `DELETE .../file/` operation supported by the backend
-  but intentionally not surfaced as a UI action in this phase.)
+  the row — is the `DELETE .../file/` operation surfaced as the **Remove file**
+  action described above.)
 - Errors use the typed `ApiError`: 400 field/validation errors inline, 403 a
   safe access-denied state, 404 a safe not-found state, 429 a friendly retry
   message, and 5xx a generic message — never raw backend internals.
@@ -539,14 +559,18 @@ the clients API module, the client list / create / detail / edit pages
 (loading, success, empty, error/retry, validation, delete confirmation,
 navigation, and URL search/filter behavior), the document-templates slice:
 the templates + reference-data API modules (methods, bodies, partial PATCH
-update incl. validation-error surfacing, version detail GET, FormData upload,
+update incl. validation-error surfacing, version detail GET, file-removal
+DELETE incl. 204/404/403 propagation, FormData upload,
 query params, binary download), the template list (loading / data / empty /
 error/retry / document-type filter / navigation), the create form (fields,
 validation, success, backend errors, duplicate-submission guard, redirect), the
 detail page (metadata, active version, version history, empty versions, 404 /
 403 / 5xx, upload incl. `.docx` validation and backend errors, authenticated
-download with filename handling, create/activate version incl. in-flight
-activation state and activation error, delete confirmation, edit-metadata link
+  download with filename handling, create/activate version incl. in-flight
+  activation state and activation error, file removal (confirm/cancel,
+  single-DELETE guard, refresh + success notice, no-file state, 403 / 404 /
+  429 / generic errors with preserved state and retry, stale-outcome guard),
+  delete confirmation, edit-metadata link
 + post-edit confirmation notice, stale-response protection when navigating
 between templates), the edit page (pre-filled metadata, read-only information,
 required-field validation, PATCH body incl. no `company_id`, success redirect
@@ -643,9 +667,10 @@ search/filter/write controls), plus protected routing for `/templates`,
   bank accounts each have a dedicated managed section on the client detail
   page. Unlike client soft-delete, nested-row deletion is a physical
   child-row delete on the backend.
-- The template file **remove-only** endpoint (`DELETE .../file/`, which clears
-  the current file without deleting the template) exists on the backend but is
-  not surfaced as a UI action in this phase.
+- The template file **remove-only** action (`DELETE .../file/`, which clears
+  the current file without deleting the template) is available on the template
+  detail page whenever the backend reports a current file; the upload form
+  stays available afterward for a replacement.
 - Version *creation* requires the template to already have a current file (the
   backend rejects it otherwise), and validates placeholders in the document's
   text — invalid/unknown placeholders are reported as a version-creation error.
