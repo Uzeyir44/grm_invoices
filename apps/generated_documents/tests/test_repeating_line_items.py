@@ -433,3 +433,52 @@ class SecurityTests(SimpleTestCase):
         source = build_docx(table_rows=[["{{ item.bogus_field }}"]])
         with self.assertRaises(UnknownPlaceholderError):
             render_document(BytesIO(source), BytesIO(), context)
+
+
+class VersionGateToRenderAlignmentTests(SimpleTestCase):
+    """
+    Guard the end-to-end loop contract: the snapshot-time gate used by
+    ``POST .../versions/`` (docx text extraction + validate_placeholders) and
+    the render engine must agree that a repeating line-item section is valid.
+    """
+
+    def test_loop_template_passes_snapshot_validation_and_renders(self):
+        from apps.document_templates.docx_text import extract_docx_text
+        from apps.document_templates.variables import validate_placeholders
+
+        source = build_docx(
+            body_paragraphs=[
+                "Items:",
+                "{{#each items}}",
+                "{{ item.description }} - {{ item.quantity }}",
+                "{{/each}}",
+                "End",
+            ]
+        )
+
+        # 1) Version-creation gate on the extracted plain text.
+        text = extract_docx_text(BytesIO(source))
+        valid, invalid = validate_placeholders(text)
+        self.assertEqual(invalid, [])
+        self.assertIn("{{ item.description }}", valid)
+
+        # 2) The same template renders correctly through the engine.
+        out = BytesIO()
+        render_document(BytesIO(source), out, base_context())
+        rendered = extract_text(out.getvalue())
+        self.assertIn("Items:", rendered)
+        self.assertIn("Consulting - 2", rendered)
+        self.assertIn("Development - 5", rendered)
+        self.assertIn("End", rendered)
+        self.assertNotIn("{{", rendered)
+
+    def test_unknown_collection_fails_snapshot_validation(self):
+        from apps.document_templates.docx_text import extract_docx_text
+        from apps.document_templates.variables import validate_placeholders
+
+        source = build_docx(
+            body_paragraphs=["{{#each bogus}}", "x", "{{/each}}"]
+        )
+        text = extract_docx_text(BytesIO(source))
+        _valid, invalid = validate_placeholders(text)
+        self.assertIn("{{#each bogus}}", invalid)

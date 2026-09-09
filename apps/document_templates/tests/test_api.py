@@ -755,6 +755,33 @@ class DocumentTemplateVersionCreateTests(DocumentTemplateVersionAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("invalid_placeholders", response.json())
 
+    def test_version_with_repeating_line_item_section_can_be_created(self):
+        # A template using the engine-supported {{#each items}} markers must
+        # be versionable: the markers are control tokens, not variables.
+        self.attach_file(
+            self.template,
+            "Items:\n"
+            "{{#each items}}\n"
+            "{{ item.description }} {{ item.quantity }}\n"
+            "{{/each}}\n"
+            "Done {{ document.number }}",
+        )
+        response = self.client.post(self.versions_url(self.template.id))
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.json()["version_number"], 1)
+        self.assertFalse(
+            "invalid_placeholders" in response.json(),
+            "repeating-section markers must not be reported invalid",
+        )
+
+    def test_unknown_each_collection_is_rejected(self):
+        self.attach_file(self.template, "{{#each bogus}}\n{{ item.description }}\n{{/each}}")
+        response = self.client.post(self.versions_url(self.template.id))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        payload = response.json()
+        self.assertIn("invalid_placeholders", payload)
+        self.assertIn("{{#each bogus}}", payload["invalid_placeholders"])
+
 
 class DocumentTemplateVersionActivationTests(DocumentTemplateVersionAPITestCase):
     def setUp(self):

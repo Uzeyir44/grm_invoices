@@ -21,6 +21,20 @@ Placeholder syntax
     {{ client.name }}
     {{ document.number }}
 
+Repeating sections (item.* variables)
+-------------------------------------
+    {{#each items}}
+    {{ item.description }}
+    {{/each}}
+
+``{{#each items}}`` / ``{{/each}}`` are control markers (not catalog
+variables) and are skipped by the validator; ``items`` is the only supported
+collection (mirroring the generation engine's ``EACH_COLLECTION``). An
+unknown collection such as ``{{#each bogus}}`` is flagged as invalid.
+Structural concerns (unbalanced/nested sections, ``item.*`` outside a
+section, table-row marker placement) are render-time checks performed by the
+placeholder engine, not by this text validator.
+
 Only the ``{{ path }}`` form is recognized. Validation is text-based; it
 turns any ``{{ ... }}`` into a normalized ``namespace.field`` key and checks
 it against the catalog.
@@ -46,6 +60,19 @@ from dataclasses import dataclass
 
 PLACEHOLDER_RE = re.compile(r"\{\{\s*(.*?)\s*\}\}")
 VARIABLE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$", re.IGNORECASE)
+
+# Control-marker recognition mirrors the generation engine's regexes
+# (apps/generated_documents/services/placeholder_engine.EACH_RE /
+# END_EACH_RE): case-sensitive, collection name must be a bare lowercase
+# identifier, and only EACH_COLLECTION ("items") is supported.
+EACH_MARKER_RE = re.compile(r"^#each\s+([a-z][a-z0-9_]*)$")
+END_EACH_MARKER_RE = re.compile(r"^/each$")
+
+
+def _is_each_marker(raw):
+    """Return the collection name if ``raw`` is a well-formed ``#each`` marker."""
+    match = EACH_MARKER_RE.match(raw)
+    return match.group(1) if match else None
 
 
 @dataclass(frozen=True)
@@ -130,12 +157,29 @@ def validate_placeholders(text):
         (valid_placeholders, invalid_placeholders)
             valid_placeholders   -> list of recognized ''{{ key }}'' strings
             invalid_placeholders -> list of ''{{ ... }}'' strings that are
-                                    malformed or reference an unknown variable
+                                    malformed, reference an unknown variable,
+                                    or name an unsupported repeating
+                                    collection. Well-formed ''{{#each items}}''
+                                    / ''{{/each}}'' markers are control tokens
+                                    and appear in neither list.
     """
     valid = []
     invalid = []
     for match in PLACEHOLDER_RE.finditer(text):
         raw = match.group(1)
+        stripped = raw.strip()
+        # ``{{/each}}`` is a closing control marker — skip it.
+        if END_EACH_MARKER_RE.match(stripped):
+            continue
+        # ``{{#each items}}`` is an opening control marker. A well-formed
+        # marker for the supported collection is skipped; a well-formed marker
+        # for any other collection is invalid (fail-fast, like the renderer).
+        collection = _is_each_marker(stripped)
+        if collection is not None:
+            if collection == EACH_COLLECTION:
+                continue
+            invalid.append("{{%s}}" % raw)
+            continue
         key = _normalize_placeholder(raw)
         if key is not None and key in VARIABLE_BY_KEY:
             valid.append(f"{{{{ {key} }}}}")
