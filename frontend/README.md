@@ -28,7 +28,8 @@ Implemented so far:
   pagination — the backend supports none).
 - **Document templates vertical slice** (Phase 5): template list with a
   document-type filter, create, detail (metadata, current file, upload/replace,
-  download, version history, create/activate version), and soft-delete.
+  download, version history, create/activate version), metadata editing, and
+  soft-delete.
 - **Clients vertical slice** (Phase 4): client list with search/filters, create,
   detail (with read-only nested data), edit, and soft-delete confirmation.
 - **Application shell + dashboard** (Phase 3): authenticated shell (responsive
@@ -200,6 +201,7 @@ the authenticated user's company (the frontend never sends `company_id`).
 | `GET /api/document-templates/?document_type=<id>` | filter by document type | `listTemplates({ document_type })` |
 | `POST /api/document-templates/` | create (201) | `createTemplate(input)` |
 | `GET /api/document-templates/:id/` | detail | `getTemplate(id)` |
+| `PATCH /api/document-templates/:id/` | partial metadata update (200) | `updateTemplate(id, input)` |
 | `DELETE /api/document-templates/:id/` | **soft-delete** (204) | `deleteTemplate(id)` |
 | `GET /api/document-templates/:id/file/` | authenticated file download (binary) | `downloadTemplateFile(id)` |
 | `POST /api/document-templates/:id/file/` | upload / replace the `.docx` (201) | `uploadTemplateFile(id, file)` |
@@ -222,9 +224,19 @@ the authenticated user's company (the frontend never sends `company_id`).
   creation time, so no file upload is collected here. The company is never sent.
 - **Detail** (`/templates/:templateId`) — template metadata (document type,
   active status, current file basename, created/updated), the **authenticated
-  file download** button, an upload/replace form, version creation, and the
-  version history. The backend returns 404 for both missing and cross-tenant
-  templates, so both render one safe "Template not found" state.
+  file download** button, an **Edit metadata** action, an upload/replace form,
+  version creation, and the version history. The backend returns 404 for both
+  missing and cross-tenant templates, so both render one safe "Template not
+  found" state. After a successful metadata edit the detail page refetches the
+  template from the backend and shows a confirmation notice. Detail and version
+  fetches are sequence-guarded so a stale in-flight response can never
+  overwrite newer template state when navigating between templates.
+- **Edit** (`/templates/:templateId/edit`) — pre-filled PATCH form for the real
+  writable metadata fields (`name`, `document_type` from the reference-data
+  catalog, `is_active`); everything else (template ID, current file,
+  timestamps) is shown as read-only information and file uploads stay on the
+  detail page. The company is never sent. On success the app returns to the
+  detail page, which reloads the metadata from the backend.
 - **Authenticated download** — files are never fetched from `/media/...`;
   downloads go through `GET /api/document-templates/:id/file/` via the shared
   API client (which attaches the bearer token and runs the existing 401 →
@@ -487,6 +499,7 @@ trigger the refresh flow.
 /templates     → template list (protected, inside AppShell)
 /templates/new → create template (protected, inside AppShell)
 /templates/:templateId → template detail (protected, inside AppShell)
+/templates/:templateId/edit → edit template metadata (protected, inside AppShell)
 /documents     → generated document list (protected, inside AppShell)
 /documents/new → create generated document (protected, inside AppShell)
 /documents/:documentId → generated document detail (protected, inside AppShell)
@@ -510,14 +523,21 @@ state, login page, protected routing, the application shell, the dashboard
 the clients API module, the client list / create / detail / edit pages
 (loading, success, empty, error/retry, validation, delete confirmation,
 navigation, and URL search/filter behavior), the document-templates slice:
-the templates + reference-data API modules (methods, bodies, FormData upload,
+the templates + reference-data API modules (methods, bodies, partial PATCH
+update incl. validation-error surfacing, FormData upload,
 query params, binary download), the template list (loading / data / empty /
 error/retry / document-type filter / navigation), the create form (fields,
 validation, success, backend errors, duplicate-submission guard, redirect), the
 detail page (metadata, active version, version history, empty versions, 404 /
 403 / 5xx, upload incl. `.docx` validation and backend errors, authenticated
 download with filename handling, create/activate version incl. in-flight
-activation state and activation error, delete confirmation), and the generated
+activation state and activation error, delete confirmation, edit-metadata link
++ post-edit confirmation notice, stale-response protection when navigating
+between templates), the edit page (pre-filled metadata, read-only information,
+required-field validation, PATCH body incl. no `company_id`, success redirect
+to the detail page, cancel without saving, duplicate-submission guard,
+backend field / generic / 403 / 404 / 429 errors with preserved values,
+load-error retry, stale-response protection), and the generated
 documents slice: the documents API module (endpoint, no query params, detail,
 create payload incl. no `company_id`, typed errors), the reference-data
 currency API, the documents list page (loading, data rendering, count, empty
@@ -551,7 +571,7 @@ accessible labels, 250 ms debounce, URL persistence, filter-change resets
 page 1, paging preserves filters, clear-filters action, filter-specific empty
 state, filtered-error retry with preserved filter values, no invented
 search/filter/write controls), plus protected routing for `/templates`,
-`/templates/new`, `/templates/:templateId`, `/documents`, `/documents/new`,
+`/templates/new`, `/templates/:templateId`, `/templates/:templateId/edit`, `/documents`, `/documents/new`,
 `/documents/:documentId`, and `/audit-logs`.
 
 ## Known limitations

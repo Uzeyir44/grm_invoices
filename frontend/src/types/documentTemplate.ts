@@ -5,6 +5,9 @@
  * * `GET /api/document-templates/`      → array of `DocumentTemplate`
  * * `GET /api/document-templates/:id/`  → `DocumentTemplate`
  * * `POST /api/document-templates/`     → `DocumentTemplate` (201)
+ * * `PATCH /api/document-templates/:id/` → `DocumentTemplate` (200, partial:
+ *                                          `name`, `document_type`,
+ *                                          `is_active` only)
  * * `DELETE /api/document-templates/:id/` → 204 (soft-delete)
  * * `GET /api/document-templates/:id/versions/` → array of `TemplateVersion`
  * * `POST /api/document-templates/:id/versions/` → `TemplateVersion` (201)
@@ -49,6 +52,22 @@ export interface TemplateVersion {
 export interface CreateTemplateInput {
   name: string
   document_type: number
+  is_active?: boolean
+}
+
+/**
+ * Body accepted by `PATCH /api/document-templates/:id/`.
+ *
+ * The backend applies `DocumentTemplateSerializer` with `partial=True`, so
+ * any subset of the writable metadata fields may be sent. Writable fields
+ * are exactly `name`, `document_type`, and `is_active` — `company_id`,
+ * `document_type_code`, `file`, `file_name`, and the timestamps are
+ * read-only (a `company_id` in the payload is silently ignored; the company
+ * always comes from the authenticated user).
+ */
+export interface UpdateTemplateInput {
+  name?: string
+  document_type?: number
   is_active?: boolean
 }
 

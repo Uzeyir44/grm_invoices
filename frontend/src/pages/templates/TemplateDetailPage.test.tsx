@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TemplateDetailPage } from './TemplateDetailPage'
 import {
@@ -349,5 +349,96 @@ describe('TemplateDetailPage', () => {
     expect(deleteCall[1].method).toBe('DELETE')
 
     expect(await screen.findByTestId('list-view')).toBeInTheDocument()
+  })
+
+  it('offers an edit-metadata action linking to the edit route', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, templateDetail))
+      .mockResolvedValueOnce(jsonResponse(200, templateVersions))
+    render(
+      <MemoryRouter initialEntries={['/templates/1']}>
+        <Routes>
+          <Route path="/templates/:templateId" element={<TemplateDetailPage />} />
+          <Route path="/templates/:templateId/edit" element={<div data-testid="edit-view" />} />
+          <Route path="/templates" element={<div data-testid="list-view" />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+    const editLink = screen.getByRole('link', { name: /edit metadata/i })
+    expect(editLink).toHaveAttribute('href', '/templates/1/edit')
+    await user.click(editLink)
+    expect(await screen.findByTestId('edit-view')).toBeInTheDocument()
+  })
+
+  it('shows a confirmation notice after a successful metadata edit', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, templateDetail))
+      .mockResolvedValueOnce(jsonResponse(200, templateVersions))
+    render(
+      <MemoryRouter
+        initialEntries={[{ pathname: '/templates/1', state: { templateUpdated: true } }]}
+      >
+        <Routes>
+          <Route path="/templates/:templateId" element={<TemplateDetailPage />} />
+          <Route path="/templates" element={<div data-testid="list-view" />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/template updated successfully/i)
+    expect(await screen.findByRole('heading', { name: /Standard Invoice/ })).toBeInTheDocument()
+  })
+
+  it('never lets a stale detail response overwrite a newer template', async () => {
+    const secondTemplate = { ...templateDetail, id: 2, name: 'Second Template' }
+    let resolveFirst: (value: Response) => void = () => {}
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/document-templates/1/') {
+        return new Promise<Response>((resolve) => {
+          resolveFirst = resolve
+        })
+      }
+      if (url === '/api/document-templates/2/') {
+        return Promise.resolve(jsonResponse(200, secondTemplate))
+      }
+      if (url.includes('/versions/')) {
+        return Promise.resolve(jsonResponse(200, []))
+      }
+      return Promise.resolve(jsonResponse(404, { detail: 'Not found.' }))
+    })
+    function GoToSecond() {
+      const navigate = useNavigate()
+      return (
+        <button type="button" onClick={() => navigate('/templates/2')}>
+          Go to second
+        </button>
+      )
+    }
+    render(
+      <MemoryRouter initialEntries={['/templates/1']}>
+        <GoToSecond />
+        <Routes>
+          <Route path="/templates/:templateId" element={<TemplateDetailPage />} />
+          <Route path="/templates" element={<div data-testid="list-view" />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    // Navigate to the second template while the first request is in flight.
+    await user.click(screen.getByRole('button', { name: /go to second/i }))
+    expect(await screen.findByRole('heading', { name: /Second Template/ })).toBeInTheDocument()
+
+    // The stale first-template response arrives late and must be ignored.
+    resolveFirst(jsonResponse(200, templateDetail))
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([url]) => url === '/api/document-templates/1/')).toBe(
+        true,
+      ),
+    )
+    expect(screen.getByRole('heading', { name: /Second Template/ })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /Standard Invoice/ })).not.toBeInTheDocument()
   })
 })

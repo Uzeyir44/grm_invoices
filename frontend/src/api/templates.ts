@@ -4,6 +4,7 @@ import type {
   DocumentTemplate,
   TemplateVersion,
   TemplatesListParams,
+  UpdateTemplateInput,
 } from '../types/documentTemplate'
 
 /**
@@ -18,6 +19,12 @@ import type {
  *                                          search/ordering params.
  *   * `POST   /document-templates/`      → create → `DocumentTemplate` (201)
  *   * `GET    /document-templates/:id/`  → `DocumentTemplate`
+ *   * `PATCH  /document-templates/:id/`  → partial metadata update
+ *                                          (`name`, `document_type`,
+ *                                          `is_active`) → `DocumentTemplate`
+ *                                          (200). `company_id` in the payload
+ *                                          is ignored — the backend keeps the
+ *                                          authenticated user's company.
  *   * `DELETE /document-templates/:id/`  → soft-delete → 204
  *   * `GET    /document-templates/:id/file/`  → authenticated file download
  *                                          (binary, `Content-Disposition`
@@ -60,6 +67,21 @@ export function getTemplate(id: number): Promise<DocumentTemplate> {
 
 export function createTemplate(input: CreateTemplateInput): Promise<DocumentTemplate> {
   return apiClient.post<DocumentTemplate>('/document-templates/', input)
+}
+
+/**
+ * Partially update a template's metadata
+ * (`PATCH /api/document-templates/:id/` → `DocumentTemplate`, 200).
+ *
+ * Only `name`, `document_type`, and `is_active` are writable (the backend
+ * serializer runs with `partial=True`; any subset may be sent). The caller
+ * must never include `company_id` / `tenant_id` / `organization_id` — the
+ * backend derives the company from the authenticated user and ignores a
+ * client-sent company. Backend validation failures surface as a typed
+ * `ApiError` with `fieldErrors` (e.g. `{ name: [...] }`).
+ */
+export function updateTemplate(id: number, input: UpdateTemplateInput): Promise<DocumentTemplate> {
+  return apiClient.patch<DocumentTemplate>(`/document-templates/${id}/`, input)
 }
 
 export function deleteTemplate(id: number): Promise<void> {

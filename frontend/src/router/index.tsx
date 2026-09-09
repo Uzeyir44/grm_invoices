@@ -15,6 +15,7 @@ import { DocumentsIndexPage } from '../pages/documents/DocumentsIndexPage'
 import { NotFoundPage } from '../pages/NotFoundPage'
 import { TemplateCreatePage } from '../pages/templates/TemplateCreatePage'
 import { TemplateDetailPage } from '../pages/templates/TemplateDetailPage'
+import { TemplateEditPage } from '../pages/templates/TemplateEditPage'
 import { TemplatesIndexPage } from '../pages/templates/TemplatesIndexPage'
 import { ProtectedRoute } from './ProtectedRoute'
 import { RedirectIfAuthenticated } from './RedirectIfAuthenticated'
@@ -41,6 +42,7 @@ export function AppRouter() {
           <Route path="templates" element={<TemplatesIndexPage />} />
           <Route path="templates/new" element={<TemplateCreatePage />} />
           <Route path="templates/:templateId" element={<TemplateDetailPage />} />
+          <Route path="templates/:templateId/edit" element={<TemplateEditPage />} />
           <Route path="documents" element={<DocumentsIndexPage />} />
           <Route path="documents/new" element={<DocumentCreatePage />} />
           <Route path="documents/:documentId" element={<DocumentDetailPage />} />

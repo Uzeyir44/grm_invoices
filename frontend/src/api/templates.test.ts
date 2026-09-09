@@ -8,6 +8,7 @@ import {
   getTemplate,
   listTemplateVersions,
   listTemplates,
+  updateTemplate,
   uploadTemplateFile,
 } from './templates'
 import {
@@ -143,6 +144,51 @@ describe('templates API', () => {
     expect(url).toBe('/api/document-templates/1/versions/10/activate/')
     expect(init.method).toBe('POST')
     expect(result).toEqual(activeTemplateVersion)
+  })
+
+  it('updates template metadata through PATCH and parses the response', async () => {
+    const updated = { ...templateDetail, name: 'Renamed Template', is_active: false }
+    fetchMock.mockResolvedValue(jsonResponse(200, updated))
+
+    const result = await updateTemplate(1, { name: 'Renamed Template', is_active: false })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/document-templates/1/')
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(String(init.body))).toEqual({ name: 'Renamed Template', is_active: false })
+    expect(result).toEqual(updated)
+  })
+
+  it('supports partial PATCH semantics for a single field', async () => {
+    const updated = { ...templateDetail, document_type: 2, document_type_code: 'consulting_contract' }
+    fetchMock.mockResolvedValue(jsonResponse(200, updated))
+
+    const result = await updateTemplate(1, { document_type: 2 })
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/document-templates/1/')
+    expect(init.method).toBe('PATCH')
+    // Only the supplied field is sent; no tenant/company identifiers leak in.
+    expect(JSON.parse(String(init.body))).toEqual({ document_type: 2 })
+    expect(result.document_type_code).toBe('consulting_contract')
+  })
+
+  it('surfaces backend validation errors from the PATCH endpoint', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(400, { name: ['Ensure this field has no more than 200 characters.'] }),
+    )
+
+    const error = await updateTemplate(1, { name: 'x'.repeat(201) }).catch((e: unknown) => e)
+    expect(error).toMatchObject({ status: 400 })
+    expect((error as { fieldErrors: Record<string, string[]> }).fieldErrors.name).toEqual([
+      'Ensure this field has no more than 200 characters.',
+    ])
+  })
+
+  it('converts a 404 PATCH into an ApiError', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(404, { detail: 'Not found.' }))
+
+    await expect(updateTemplate(999, { name: 'Ghost' })).rejects.toMatchObject({ status: 404 })
   })
 
   it('downloads the authenticated file as a blob with the response filename', async () => {

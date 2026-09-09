@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import {
   activateTemplateVersion,
@@ -11,6 +11,7 @@ import {
   uploadTemplateFile,
 } from '../../api/templates'
 import { Button } from '../../components/ui/Button'
+import { buttonClasses } from '../../components/ui/buttonClasses'
 import { PageContainer } from '../../components/ui/PageContainer'
 import { ApiError, HTTP_STATUS } from '../../types/api'
 import type { DocumentTemplate, TemplateVersion } from '../../types/documentTemplate'
@@ -57,11 +58,18 @@ function uploadErrorFor(error: unknown): string {
  * safe "not found" state. File / version operations stream only through the
  * authenticated backend endpoints — never `/media/...` URLs. A failed optional
  * section (e.g. the version history) never takes down the whole page.
+ * Metadata editing lives on `/templates/:templateId/edit`; after a successful
+ * edit the router carries `location.state.templateUpdated` so this page can
+ * show a confirmation notice. Detail and version fetches are sequence-guarded
+ * so a stale in-flight response can never overwrite newer template state.
  */
 export function TemplateDetailPage() {
   const { templateId } = useParams()
   const id = Number(templateId)
   const navigate = useNavigate()
+  const location = useLocation()
+  const updatedNotice =
+    (location.state as { templateUpdated?: boolean } | null)?.templateUpdated === true
 
   const [state, setState] = useState<State>({ status: 'loading' })
 
@@ -89,10 +97,35 @@ export function TemplateDetailPage() {
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string>()
 
+  // Monotonic request ids: only the latest detail / versions response for the
+  // current template may update state.
+  const templateRequestRef = useRef(0)
+  const versionsRequestRef = useRef(0)
+
+  // The route moved to a different template: drop the previous template's
+  // state immediately so stale metadata/versions are never shown for the new
+  // one. (Render-phase adjustment for the new `id`; the effects below refetch.
+  // The sequence guards above additionally discard late responses.)
+  const [idKey, setIdKey] = useState(id)
+  if (idKey !== id) {
+    setIdKey(id)
+    setState({ status: 'loading' })
+    setVersions(null)
+    setVersionsError(false)
+  }
+
   const loadTemplate = useCallback(() => {
+    // Sequence-guarded: a stale in-flight response must never overwrite newer
+    // template state when navigating rapidly between detail routes (the same
+    // race previously fixed in the Clients domain).
+    const requestId = ++templateRequestRef.current
     void getTemplate(id)
-      .then((data) => setState({ status: 'ready', data }))
+      .then((data) => {
+        if (templateRequestRef.current !== requestId) return
+        setState({ status: 'ready', data })
+      })
       .catch((error: unknown) => {
+        if (templateRequestRef.current !== requestId) return
         if (error instanceof ApiError && error.status === HTTP_STATUS.NOT_FOUND) {
           setState({ status: 'notfound' })
         } else if (error instanceof ApiError && error.status === HTTP_STATUS.FORBIDDEN) {
@@ -104,9 +137,16 @@ export function TemplateDetailPage() {
   }, [id])
 
   const loadVersions = useCallback(() => {
+    const requestId = ++versionsRequestRef.current
     void listTemplateVersions(id)
-      .then((data) => setVersions(data))
-      .catch(() => setVersionsError(true))
+      .then((data) => {
+        if (versionsRequestRef.current !== requestId) return
+        setVersions(data)
+      })
+      .catch(() => {
+        if (versionsRequestRef.current !== requestId) return
+        setVersionsError(true)
+      })
   }, [id])
 
   useEffect(() => {
@@ -300,7 +340,16 @@ function versionErrorMessage(error: unknown): string {
           Back to templates
         </Link>
 
+        {updatedNotice ? (
+          <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+            Template updated successfully.
+          </p>
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-3">
+          <Link to={`/templates/${template.id}/edit`} className={buttonClasses('secondary')}>
+            Edit metadata
+          </Link>
           {template.file ? (
             <Button
               variant="secondary"
