@@ -33,7 +33,9 @@ class ClientAPITestCase(APITestCase):
         self.bob = make_user(self.company_a, email="bob@example.com")
         self.carol = make_user(self.company_b, email="carol@example.com")
         self.address_type = AddressType.objects.create(code="test_address")
-        self.currency = Currency.objects.create(code="AZN", name="Azerbaijani Manat")
+        self.currency, _ = Currency.objects.get_or_create(
+            code="AZN", defaults={"name": "Azerbaijani Manat", "minor_unit": 2}
+        )
         self.bank = Bank.objects.create(name="Test Bank")
 
     def grant(self, user, *codes):

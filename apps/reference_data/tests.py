@@ -170,9 +170,10 @@ class SeedCatalogTests(TestCase):
     def test_catalogs_without_canonical_definitions_are_not_seeded(self):
         # No authoritative canonical values are defined (yet) for these
         # catalogs, so a migration-built database must contain no rows for
-        # them. No values are invented. (Document types do have canonical
-        # values — see 0003_seed_document_types and SeededDocumentTypeTests.)
-        for model_class in (Currency, VatRate, Bank):
+        # them. No values are invented. (Document types and currencies do have
+        # canonical values — see 0003_seed_document_types,
+        # 0004_seed_currencies, SeededDocumentTypeTests and SeededCurrencyTests.)
+        for model_class in (VatRate, Bank):
             self.assertEqual(
                 model_class.objects.count(),
                 0,
@@ -295,12 +296,12 @@ class ReferenceDataCatalogTests(ReferenceDataApiTestCase):
         )
 
     def test_currently_unseeded_catalogs_return_empty_without_fabricating_data(self):
-        # Document types are seeded (0003_seed_document_types) and covered by
-        # SeededDocumentTypeTests below; the remaining catalogs are still
+        # Document types and currencies are seeded (0003_seed_document_types,
+        # 0004_seed_currencies) and covered by SeededDocumentTypeTests and
+        # SeededCurrencyTests below; the remaining catalogs are still
         # unseeded and must return an empty list without fabricating data.
         for name in (
             "reference-bank-list",
-            "reference-currency-list",
             "reference-vat-rate-list",
             "reference-exchange-rate-list",
         ):
@@ -309,7 +310,6 @@ class ReferenceDataCatalogTests(ReferenceDataApiTestCase):
             self.assertEqual(response.json(), [], name)
         # Nothing was fabricated.
         self.assertEqual(Bank.objects.count(), 0)
-        self.assertEqual(Currency.objects.count(), 0)
         self.assertEqual(VatRate.objects.count(), 0)
         self.assertEqual(ExchangeRate.objects.count(), 0)
 
@@ -405,6 +405,77 @@ class SeededDocumentTypeTests(ReferenceDataApiTestCase):
         self.assertEqual(remaining, {"contract"})
 
 
+class SeededCurrencyTests(ReferenceDataApiTestCase):
+    """
+    Coverage for the 0004_seed_currencies data migration: the currency
+    catalog is seeded (unlike banks, VAT rates, and exchange rates), shared
+    across companies, ordered by code, and the migration is idempotent with
+    a reverse that removes only the seeded rows.
+    """
+
+    SEEDED = {
+        "AZN": ("Manat", 2),
+        "USD": ("US Dollar", 2),
+        "EUR": ("Euro", 2),
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.grant(self.user, *self.READ)
+        self.grant(self.other_user, *self.READ)
+
+    def test_seeded_currencies_exist_with_exact_values(self):
+        rows = {row.code: (row.name, row.minor_unit) for row in Currency.objects.all()}
+        for code, (name, minor_unit) in self.SEEDED.items():
+            self.assertEqual(rows.get(code), (name, minor_unit), code)
+        self.assertEqual(Currency.objects.count(), len(self.SEEDED))
+
+    def test_catalog_endpoint_returns_seeded_currencies_ordered_by_code(self):
+        self.auth(self.user)
+        response = self.client.get(self.list_url("reference-currency-list"))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rows = response.json()
+        self.assertEqual([row["code"] for row in rows], sorted(self.SEEDED))
+        self.assertEqual(
+            [(row["code"], row["name"], row["minor_unit"]) for row in rows],
+            [(code, *self.SEEDED[code]) for code in sorted(self.SEEDED)],
+        )
+        for row in rows:
+            self.assertEqual(set(row.keys()), {"id", "code", "name", "minor_unit"})
+
+    def test_seeded_catalog_is_shared_across_companies(self):
+        self.auth(self.user)
+        a_codes = [row["code"] for row in self.client.get(
+            self.list_url("reference-currency-list")
+        ).json()]
+        self.auth(self.other_user)
+        b_codes = [row["code"] for row in self.client.get(
+            self.list_url("reference-currency-list")
+        ).json()]
+        self.assertEqual(a_codes, b_codes)
+        self.assertEqual(a_codes, sorted(self.SEEDED))
+
+    def test_seed_migration_is_idempotent(self):
+        from importlib import import_module
+
+        migration = import_module("apps.reference_data.migrations.0004_seed_currencies")
+        migration.seed_currencies(apps, None)
+        migration.seed_currencies(apps, None)
+        self.assertEqual(Currency.objects.count(), len(self.SEEDED))
+        for code, (name, minor_unit) in self.SEEDED.items():
+            row = Currency.objects.get(code=code)
+            self.assertEqual((row.name, row.minor_unit), (name, minor_unit))
+
+    def test_reverse_migration_removes_only_seeded_currencies(self):
+        from importlib import import_module
+
+        Currency.objects.create(code="GBP", name="Pound Sterling", minor_unit=2)
+        migration = import_module("apps.reference_data.migrations.0004_seed_currencies")
+        migration.unseed_currencies(apps, None)
+        remaining = {row.code for row in Currency.objects.all()}
+        self.assertEqual(remaining, {"GBP"})
+
+
 class ReferenceDataReadOnlyTests(ReferenceDataApiTestCase):
     def setUp(self):
         super().setUp()
@@ -464,13 +535,16 @@ class ReferenceDataBusinessValidationTests(APITestCase):
         self.alice = make_user(self.company_a, email="alice@example.com")
         self.carol = make_user(self.company_b, email="carol@example.com")
 
-        # Shared catalogs: AddressType already has canonical seed rows
-        # (legal/business/residential); the other catalogs are currently
+        # Shared catalogs: AddressType has canonical seed rows
+        # (legal/business/residential), as do DocumentType and Currency
+        # (see the seed migrations); the other catalogs are currently
         # unseeded, so their rows here are application/test fixtures managed
         # through the ORM — not seed data.
         self.address_type = AddressType.objects.get(code="legal")
         self.bank = Bank.objects.create(name="Test Bank")
-        self.currency = Currency.objects.create(code="AZN", name="Manat")
+        self.currency, _ = Currency.objects.get_or_create(
+            code="AZN", defaults={"name": "Manat", "minor_unit": 2}
+        )
         self.document_type, _ = DocumentType.objects.get_or_create(
             code="invoice", defaults={"name": "Invoice"}
         )
