@@ -442,8 +442,7 @@ describe('TemplateDetailPage', () => {
     expect(screen.queryByRole('heading', { name: /Standard Invoice/ })).not.toBeInTheDocument()
   })
 
-  describe('file removal', () => {
-    const noFileDetail = { ...templateDetail, file: null, file_name: null }
+  describe('file removal', () => {    const noFileDetail = { ...templateDetail, file: null, file_name: null }
 
     function stubRemovalBackend(
       onDelete?: (url: string) => Response | Promise<Response>,
@@ -711,6 +710,120 @@ describe('TemplateDetailPage', () => {
           String(url) === '/api/document-templates/1/' && (init as RequestInit)?.method === 'GET',
       )
       // Only the initial mount fetch; no stale refresh after navigation.
+      expect(refetchOfFirst).toHaveLength(1)
+    })
+  })
+
+  describe('cross-template navigation', () => {
+    const secondTemplate = {
+      ...templateDetail,
+      id: 2,
+      name: 'Second Template',
+      file: '/api/document-templates/2/file/',
+      file_name: 'templates/company_10/2/current/second.docx',
+    }
+
+    function stubTwoTemplates(onUpload?: () => Response | Promise<Response>) {
+      fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url === '/api/document-templates/1/file/' && method === 'POST') {
+          if (onUpload) return Promise.resolve(onUpload())
+          return Promise.resolve(jsonResponse(201, { id: 1, file_name: 'tpl.docx' }))
+        }
+        if (url === '/api/document-templates/1/' && method === 'GET') {
+          return Promise.resolve(jsonResponse(200, templateDetail))
+        }
+        if (url === '/api/document-templates/2/' && method === 'GET') {
+          return Promise.resolve(jsonResponse(200, secondTemplate))
+        }
+        if (url.includes('/versions/')) {
+          return Promise.resolve(jsonResponse(200, templateVersions))
+        }
+        return Promise.resolve(jsonResponse(404, { detail: 'Not found.' }))
+      })
+    }
+
+    function renderNavigableDetail() {
+      function GoToSecond() {
+        const navigate = useNavigate()
+        return (
+          <button type="button" onClick={() => navigate('/templates/2')}>
+            Go to second
+          </button>
+        )
+      }
+      return render(
+        <MemoryRouter initialEntries={['/templates/1']}>
+          <GoToSecond />
+          <Routes>
+            <Route path="/templates/:templateId" element={<TemplateDetailPage />} />
+            <Route path="/templates" element={<div data-testid="list-view" />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+    }
+
+    it('drops the removal confirmation when moving to another template', async () => {
+      stubTwoTemplates()
+      renderNavigableDetail()
+      await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+      await user.click(screen.getByRole('button', { name: 'Remove file' }))
+      expect(screen.getByText(/remove the current file/i)).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: /go to second/i }))
+      expect(await screen.findByRole('heading', { name: /Second Template/ })).toBeInTheDocument()
+      expect(screen.queryByText(/remove the current file/i)).not.toBeInTheDocument()
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    it('clears upload success state when moving to another template', async () => {
+      stubTwoTemplates()
+      renderNavigableDetail()
+      await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+      const file = new File(['bytes'], 'contract.docx')
+      fireEvent.change(screen.getByLabelText(/replace template file/i), {
+        target: { files: [file] },
+      })
+      await user.click(screen.getByRole('button', { name: /upload file/i }))
+      expect(await screen.findByRole('status')).toHaveTextContent(/file uploaded successfully/i)
+
+      await user.click(screen.getByRole('button', { name: /go to second/i }))
+      expect(await screen.findByRole('heading', { name: /Second Template/ })).toBeInTheDocument()
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    })
+
+    it('ignores a late upload outcome after moving to another template', async () => {
+      let resolveUpload: (value: Response) => void = () => {}
+      stubTwoTemplates(
+        () =>
+          new Promise<Response>((resolve) => {
+            resolveUpload = resolve
+          }),
+      )
+      renderNavigableDetail()
+      await screen.findByRole('heading', { name: /Standard Invoice/ })
+
+      const file = new File(['bytes'], 'contract.docx')
+      fireEvent.change(screen.getByLabelText(/replace template file/i), {
+        target: { files: [file] },
+      })
+      await user.click(screen.getByRole('button', { name: /upload file/i }))
+
+      await user.click(screen.getByRole('button', { name: /go to second/i }))
+      expect(await screen.findByRole('heading', { name: /Second Template/ })).toBeInTheDocument()
+
+      // Template A's late upload success must not leak notices or refreshes.
+      resolveUpload(jsonResponse(201, { id: 1, file_name: 'tpl.docx' }))
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+      expect(screen.getByRole('heading', { name: /Second Template/ })).toBeInTheDocument()
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+      const refetchOfFirst = fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url) === '/api/document-templates/1/' && (init as RequestInit)?.method === 'GET',
+      )
       expect(refetchOfFirst).toHaveLength(1)
     })
   })

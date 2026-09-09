@@ -146,9 +146,24 @@ export function TemplateDetailPage() {
     setState({ status: 'loading' })
     setVersions(null)
     setVersionsError(false)
+    setDownloading(false)
+    setDownloadError(undefined)
     setConfirmRemoveFile(false)
     setRemoveFileError(undefined)
     setRemoveFileSuccess(false)
+    setUploadFile(null)
+    setUploading(false)
+    setUploadError(undefined)
+    setUploadSuccess(false)
+    setCreatingVersion(false)
+    setVersionError(undefined)
+    setVersionSuccess(false)
+    setConfirmActivateId(null)
+    setActivatingId(null)
+    setActivationError(undefined)
+    setConfirmDelete(false)
+    setDeleting(false)
+    setDeleteError(undefined)
   }
 
   const loadTemplate = useCallback(() => {
@@ -217,9 +232,11 @@ export function TemplateDetailPage() {
   }
 
   function handleDownload() {
+    if (downloading) return
+    const requestTemplateId = id
     setDownloading(true)
     setDownloadError(undefined)
-    void downloadTemplateFile(id)
+    void downloadTemplateFile(requestTemplateId)
       .then(({ blob, filename }) => {
         const url = URL.createObjectURL(blob)
         const anchor = document.createElement('a')
@@ -231,6 +248,7 @@ export function TemplateDetailPage() {
         URL.revokeObjectURL(url)
       })
       .catch((error: unknown) => {
+        if (idRef.current !== requestTemplateId) return
         setDownloadError(errorMessage(error, 'Could not download the file.'))
       })
       .finally(() => setDownloading(false))
@@ -246,18 +264,23 @@ export function TemplateDetailPage() {
       return
     }
 
+    const form = event.currentTarget
+    const file = uploadFile
+    const requestTemplateId = id
     setUploading(true)
     setUploadError(undefined)
     setUploadSuccess(false)
-    void uploadTemplateFile(id, uploadFile)
+    void uploadTemplateFile(requestTemplateId, file)
       .then(() => {
+        if (idRef.current !== requestTemplateId) return
         setUploadSuccess(true)
         setUploadFile(null)
-        event.currentTarget.reset()
+        form.reset()
         loadTemplate()
         reloadVersions()
       })
       .catch((error: unknown) => {
+        if (idRef.current !== requestTemplateId) return
         setUploadError(uploadErrorFor(error))
       })
       .finally(() => setUploading(false))
@@ -277,39 +300,50 @@ function versionErrorMessage(error: unknown): string {
 
   function handleCreateVersion() {
     if (creatingVersion) return
+    const requestTemplateId = id
     setCreatingVersion(true)
     setVersionError(undefined)
     setVersionSuccess(false)
-    void createTemplateVersion(id)
+    void createTemplateVersion(requestTemplateId)
       .then(() => {
+        if (idRef.current !== requestTemplateId) return
         setVersionSuccess(true)
         reloadVersions()
       })
-      .catch((error: unknown) => setVersionError(versionErrorMessage(error)))
+      .catch((error: unknown) => {
+        if (idRef.current !== requestTemplateId) return
+        setVersionError(versionErrorMessage(error))
+      })
       .finally(() => setCreatingVersion(false))
   }
 
   function handleActivate(versionId: number) {
     if (activatingId !== null) return
+    const requestTemplateId = id
     setActivatingId(versionId)
     setActivationError(undefined)
-    void activateTemplateVersion(id, versionId)
+    void activateTemplateVersion(requestTemplateId, versionId)
       .then(() => {
+        if (idRef.current !== requestTemplateId) return
         setConfirmActivateId(null)
         reloadVersions()
       })
       .catch((error: unknown) => {
+        if (idRef.current !== requestTemplateId) return
         setActivationError(errorMessage(error, 'Could not activate the version.'))
       })
       .finally(() => setActivatingId(null))
   }
 
   function handleDelete() {
+    if (deleting) return
+    const requestTemplateId = id
     setDeleting(true)
     setDeleteError(undefined)
-    void deleteTemplate(id)
+    void deleteTemplate(requestTemplateId)
       .then(() => navigate('/templates'))
       .catch((error: unknown) => {
+        if (idRef.current !== requestTemplateId) return
         setDeleteError(errorMessage(error, 'Could not delete the template.'))
       })
       .finally(() => setDeleting(false))

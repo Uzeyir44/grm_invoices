@@ -206,7 +206,6 @@ the authenticated user's company (the frontend never sends `company_id`).
 | `GET /api/document-templates/:id/file/` | authenticated file download (binary) | `downloadTemplateFile(id)` |
 | `POST /api/document-templates/:id/file/` | upload / replace the `.docx` (201) | `uploadTemplateFile(id, file)` |
 | `DELETE /api/document-templates/:id/file/` | remove the file (204) | `deleteTemplateFile(id)` |
-| `DELETE /api/document-templates/:id/file/` | remove the file (204) | `deleteTemplateFile(id)` |
 | `GET /api/document-templates/:id/versions/` | version list | `listTemplateVersions(id)` |
 | `GET /api/document-templates/:id/versions/:vid/` | **version detail** | `getTemplateVersion(id, vid)` |
 | `POST /api/document-templates/:id/versions/` | create a version from the current file (201) | `createTemplateVersion(id)` |
@@ -269,8 +268,8 @@ the authenticated user's company (the frontend never sends `company_id`).
   overwrite a newer template after navigation.
 - **Delete** — soft-delete with an explicit inline confirmation step; after
   success the app returns to the template list. (Removing just the *file* — not
-  the row — is the `DELETE .../file/` operation above, surfaced as the
-  **Remove file** action on the detail page.)
+  the row — is the `DELETE .../file/` operation surfaced as the **Remove file**
+  action described above.)
 - **Versioning** — `POST .../versions/` snapshots the template's **current
   file** as a new immutable version (the new version becomes the active one, as
   the backend contract dictates — the frontend does not invent this). Version
@@ -291,10 +290,6 @@ the authenticated user's company (the frontend never sends `company_id`).
   issues no PATCH/POST/DELETE and offers no file download (the backend
   exposes no version-file download — only the template's current file is
   downloadable from the template detail page).
-- **Delete** — soft-delete with an explicit inline confirmation step; after
-  success the app returns to the template list. (Removing just the *file* — not
-  the row — is the `DELETE .../file/` operation surfaced as the **Remove file**
-  action described above.)
 - Errors use the typed `ApiError`: 400 field/validation errors inline, 403 a
   safe access-denied state, 404 a safe not-found state, 429 a friendly retry
   message, and 5xx a generic message — never raw backend internals.

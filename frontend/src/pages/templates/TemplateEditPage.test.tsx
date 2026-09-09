@@ -344,4 +344,31 @@ describe('TemplateEditPage', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled())
     expect(screen.getByLabelText(/template name/i)).toHaveValue('Second Template')
   })
+
+  it('ignores a late submit outcome after moving to another template', async () => {
+    let resolvePatch: (value: Response) => void = () => {}
+    stubBackend({
+      onPatch: () =>
+        new Promise<Response>((resolve) => {
+          resolvePatch = resolve
+        }),
+    })
+    renderEditAt('/templates/1/edit', true)
+    await screen.findByLabelText(/template name/i)
+
+    // Submit for template 1, then move to template 2 while it is in flight.
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+    await user.click(screen.getByRole('button', { name: /go to second/i }))
+    expect(await screen.findByDisplayValue('Second Template')).toBeInTheDocument()
+
+    // The late success must not navigate back to template 1's detail page
+    // nor disturb template 2's form.
+    resolvePatch(jsonResponse(200, { ...templateDetail, name: 'Renamed Template' }))
+    // Let the guarded continuation run: a macrotask flush guarantees the
+    // late PATCH outcome was processed before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.queryByTestId('detail-view')).not.toBeInTheDocument()
+    expect(screen.getByLabelText(/template name/i)).toHaveValue('Second Template')
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled()
+  })
 })

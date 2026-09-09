@@ -79,6 +79,10 @@ export function TemplateEditPage() {
   const [formError, setFormError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
   const mountedRef = useRef(true)
+  // Latest route id, so a late submit outcome never navigates away from or
+  // writes errors onto a different template's form. Synced in an effect
+  // declared before the loading effects below.
+  const idRef = useRef(id)
 
   // The route moved to a different template: drop the previous template's
   // form state immediately so stale values are never shown for the new one.
@@ -91,6 +95,9 @@ export function TemplateEditPage() {
     setLoadError(undefined)
     setNotFound(false)
     setTypesError(false)
+    setFieldErrors({})
+    setFormError(undefined)
+    setSubmitting(false)
   }
 
   useEffect(() => {
@@ -99,6 +106,10 @@ export function TemplateEditPage() {
       mountedRef.current = false
     }
   }, [])
+
+  useEffect(() => {
+    idRef.current = id
+  })
 
   useEffect(() => {
     if (Number.isNaN(id)) return
@@ -181,15 +192,17 @@ export function TemplateEditPage() {
     if (Object.keys(localErrors).length > 0) return
 
     setSubmitting(true)
+    const requestTemplateId = id
     try {
-      await updateTemplate(id, {
+      await updateTemplate(requestTemplateId, {
         name: name.trim(),
         document_type: Number(documentTypeId),
         is_active: isActive,
       })
-      navigate(`/templates/${id}`, { state: { templateUpdated: true } })
+      if (!mountedRef.current || idRef.current !== requestTemplateId) return
+      navigate(`/templates/${requestTemplateId}`, { state: { templateUpdated: true } })
     } catch (error) {
-      if (!mountedRef.current) return
+      if (!mountedRef.current || idRef.current !== requestTemplateId) return
       if (error instanceof ApiError) {
         const errors = firstFieldErrors(error)
         setFieldErrors(errors)
@@ -198,7 +211,7 @@ export function TemplateEditPage() {
         setFormError('Template update failed. Please try again.')
       }
     } finally {
-      if (mountedRef.current) setSubmitting(false)
+      if (mountedRef.current && idRef.current === requestTemplateId) setSubmitting(false)
     }
   }
 
