@@ -138,6 +138,7 @@ POST /api/authentication/token/                      auth_login     (per IP)
 POST /api/authentication/token/refresh/              auth_refresh   (per IP)
 POST /api/generated-documents/                       document_creation
 POST /api/generated-documents/generate-from-input/   document_generation
+POST /api/generated-documents/preview/               document_generation
 POST /api/generated-documents/<id>/generate/         document_generation
 POST /api/generated-documents/versions/<id>/generate-pdf/  pdf_generation
 ```
@@ -1162,6 +1163,7 @@ The package lives in `apps/generated_documents/api/` (`serializers.py`,
 GET  /api/generated-documents/                              list documents (tenant scope)
 POST /api/generated-documents/                              create a document (numbering + initial version)
 POST /api/generated-documents/generate-from-input/          atomic create + DOCX + PDF (single transaction)
+POST /api/generated-documents/preview/                      non-persistent PDF preview
 GET  /api/generated-documents/<id>/                         retrieve a document
 POST /api/generated-documents/<id>/generate/                generate DOCX (Step 4.4 service)
 GET  /api/generated-documents/<id>/versions/                list the document's versions
@@ -1200,6 +1202,19 @@ back — no document, version, line items, audit records, or consumed number
 remain, and already-written files are removed. Requires
 `generated_documents.generate`; throttled under the `document_generation`
 scope.
+
+`POST /api/generated-documents/preview/` accepts the same body as document
+creation and renders the current form data into a temporary PDF using the
+**same** generation pipeline (context builder, placeholder engine, DOCX → PDF
+converter). It persists nothing — no document, version, line item, audit
+event, stored file, or consumed number — and renders the provisional document
+number `PREVIEW` so a preview can never be mistaken for a real document.
+`apps/generated_documents/services/preview.py` reuses the shared preparation
+helper (`prepare_generation_input`) and a document-less context mode
+(`build_generation_context(..., document=None, document_number=..., items=...)`).
+Requires `generated_documents.generate`; throttled under the
+`document_generation` scope. Errors map identically to Generate (400/403/404/
+503).
 
 ### Permissions
 
@@ -1251,8 +1266,8 @@ version and never invalidates previously generated versions.
 ### Deferred
 
 ```text
-Frontend, document preview, PDF editing, email delivery, background workers →
-future steps (out of scope for Step 4.6)
+PDF editing, email delivery, background workers → future steps (out of scope
+for Step 4.6)
 ```
 
 ---

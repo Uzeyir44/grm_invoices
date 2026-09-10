@@ -32,6 +32,12 @@ import type {
  *     `GeneratedDocument` (201, status `generated`). A failed generation
  *     persists nothing: no document, no version, no line items, no audit
  *     record, no consumed document number, no orphan files.
+ *   * `POST /generated-documents/preview/` → **non-persistent PDF preview** —
+ *     renders the current form data with the real generation pipeline and
+ *     returns the resulting PDF bytes (`application/pdf`). Same body as
+ *     Generate. Persists nothing: no document, version, line items, audit
+ *     event, consumed document number, or stored file. Rendered with the
+ *     provisional number `PREVIEW`.
  *   * `POST /generated-documents/:id/generate/` → **DOCX generation** —
  *     synchronous. No body is required (an optional `currency_id` is
  *     accepted; omitted when unknown). Returns the created
@@ -166,4 +172,22 @@ export function generateDocumentFromInput(
   input: CreateGeneratedDocumentInput,
 ): Promise<GeneratedDocument> {
   return apiClient.post<GeneratedDocument>('/generated-documents/generate-from-input/', input)
+}
+
+/**
+ * Render a non-persistent PDF preview of the current form data
+ * (`POST /generated-documents/preview/`). The backend reuses the real
+ * generation pipeline but persists nothing (no document, version, line items,
+ * audit event, consumed number, or stored file). Returns the PDF `Blob`; the
+ * caller turns it into a temporary `blob:` URL. Never `/media/...`, never a
+ * token in a URL.
+ */
+export async function previewGeneratedDocument(
+  input: CreateGeneratedDocumentInput,
+): Promise<Blob> {
+  const response = await apiClient.raw('/generated-documents/preview/', {
+    method: 'POST',
+    body: input,
+  })
+  return response.blob()
 }

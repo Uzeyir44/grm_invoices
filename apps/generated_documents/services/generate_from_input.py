@@ -35,6 +35,8 @@ independent of HTTP/DRF: it takes plain values and model instances and returns
 the created :class:`GeneratedDocument`.
 """
 
+from typing import NamedTuple
+
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import transaction
@@ -64,6 +66,52 @@ from apps.generated_documents.services.pdf_generator import (
     _is_pdf_bytes,
     convert_docx_bytes_to_pdf,
 )
+
+
+class PreparedGenerationInput(NamedTuple):
+    """Validated + prepared inputs shared by generation and preview."""
+
+    currency: object
+    template: object
+    template_version: object
+    items: list
+    computed_items: list
+    item_snapshots: list
+
+
+def prepare_generation_input(
+    *, company, client, document_type_id, currency_id, items
+):
+    """
+    Validate and prepare the shared generation inputs without persisting
+    anything.
+
+    Used by both the atomic Generate service and the non-persistent preview
+    service so they resolve the client/currency/template and compute line-item
+    totals identically. Raises :class:`DocumentCreationError` for a
+    cross-company client, an unknown/missing currency, or a missing active
+    template/version.
+    """
+    if client.company_id != company.id:
+        raise DocumentCreationError(
+            "The client does not belong to the document's company."
+        )
+    currency = _resolve_currency(currency_id)
+    template, template_version = _resolve_template(company, document_type_id)
+    items = list(items or [])
+    computed_items = [_compute_totals(item) for item in items]
+    item_snapshots = [
+        _line_item_snapshot(index, item, computed)
+        for index, (item, computed) in enumerate(zip(items, computed_items), start=1)
+    ]
+    return PreparedGenerationInput(
+        currency=currency,
+        template=template,
+        template_version=template_version,
+        items=items,
+        computed_items=computed_items,
+        item_snapshots=item_snapshots,
+    )
 
 
 def generate_document_from_input(
@@ -121,14 +169,18 @@ def generate_document_from_input(
             failed. Nothing is persisted — the whole operation (including the
             rendered DOCX and its database rows) rolls back.
     """
-    if client.company_id != company.id:
-        raise DocumentCreationError(
-            "The client does not belong to the document's company."
-        )
-
-    currency = _resolve_currency(currency_id)
-    template, template_version = _resolve_template(company, document_type_id)
-    items = list(items or [])
+    prepared = prepare_generation_input(
+        company=company,
+        client=client,
+        document_type_id=document_type_id,
+        currency_id=currency_id,
+        items=items,
+    )
+    currency = prepared.currency
+    template = prepared.template
+    template_version = prepared.template_version
+    items = prepared.items
+    computed_items = prepared.computed_items
 
     if converter is None:
         converter = convert_docx_bytes_to_pdf
@@ -147,20 +199,15 @@ def generate_document_from_input(
             created_by=user,
         )
 
-        computed_items = [_compute_totals(item) for item in items]
-
         # Generation context from the company/client/document plus the item
-        # snapshots prepared here (same construction as document creation).
+        # snapshots prepared by the shared helper.
         context = build_generation_context(
             company=company,
             client=client,
             document=document,
             require_client=False,
         )
-        context["items"] = [
-            _line_item_snapshot(index, item, computed)
-            for index, (item, computed) in enumerate(zip(items, computed_items), start=1)
-        ]
+        context["items"] = prepared.item_snapshots
 
         rendered_bytes = _render_docx(template_version, context)
 

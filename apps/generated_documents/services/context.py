@@ -57,17 +57,25 @@ def _assert_tenant_consistent(company, client, document):
     """
     Defense-in-depth tenant check: company, client (when present) and the
     document must all belong to the same company. The document is the
-    authoritative tenant anchor; the ``company`` argument acts as the expected
-    tenant (e.g. request.user.company) and must match.
+    authoritative tenant anchor when present; otherwise the ``company``
+    argument (e.g. request.user.company for a non-persistent preview) is the
+    anchor.
     """
-    document_company_id = document.company_id
-    if company is not None and company.id != document_company_id:
+    if document is not None:
+        anchor_company_id = document.company_id
+    elif company is not None:
+        anchor_company_id = company.id
+    else:
+        raise GenerationContextError(
+            "A company (or document) is required to resolve the tenant."
+        )
+    if company is not None and company.id != anchor_company_id:
         raise GenerationContextError(
             "The provided company does not match the document's company "
             "(tenant mismatch)."
         )
     if client is not None:
-        _assert_company_matches(client, document_company_id, "Client")
+        _assert_company_matches(client, anchor_company_id, "Client")
 
 
 def _client_name(client):
@@ -138,21 +146,33 @@ def build_client_context(client):
     }
 
 
-def build_document_context(document):
-    """Document portion of the context (approved document.* variables)."""
+def build_document_context(document, *, number=None, date=None, type_name=None):
+    """
+    Document portion of the context (approved document.* variables).
+
+    Values are read from ``document`` by default. Explicit ``number`` / ``date``
+    / ``type_name`` overrides let a non-persistent preview render from unsaved
+    form data (e.g. a provisional number) without a ``GeneratedDocument``.
+    """
+    if document is not None:
+        if number is None:
+            number = document.document_number
+        if date is None:
+            date = (
+                document.created_at.date().isoformat()
+                if document.created_at is not None
+                else None
+            )
+        if type_name is None:
+            type_name = document.document_type.name
     return {
-        "number": _require(document.document_number, "document.number"),
-        "date": _require(
-            document.created_at.date().isoformat()
-            if document.created_at is not None
-            else None,
-            "document.date",
-        ),
-        "type": _require(document.document_type.name, "document.type"),
+        "number": _require(number, "document.number"),
+        "date": _require(date, "document.date"),
+        "type": _require(type_name, "document.type"),
     }
 
 
-def build_line_items_context(version):
+def build_line_items_context(version, items=None):
     """
     Line-item portion of the context (the ``items`` collection + ``item.*``).
 
@@ -162,9 +182,15 @@ def build_line_items_context(version):
     formatting by the placeholder engine. Optional blank text fields resolve
     to ``None`` (the project's empty-value convention).
 
+    An explicit ``items`` list (already in snapshot form, e.g. built from
+    unsaved form data for a preview) is returned as-is, bypassing any
+    persistence lookup.
+
     A ``None`` version (document with no version snapshot) yields an empty
     collection.
     """
+    if items is not None:
+        return list(items)
     if version is None:
         return []
     items = version.line_items.order_by("line_number")
@@ -185,7 +211,18 @@ def build_line_items_context(version):
     ]
 
 
-def build_generation_context(company=None, client=None, document=None, *, require_client=True, version=None):
+def build_generation_context(
+    company=None,
+    client=None,
+    document=None,
+    *,
+    require_client=True,
+    version=None,
+    document_number=None,
+    document_date=None,
+    document_type_name=None,
+    items=None,
+):
     """
     Build the validated template data context for a generated document.
 
@@ -194,13 +231,22 @@ def build_generation_context(company=None, client=None, document=None, *, requir
                   If not given, ``document.company`` is the tenant anchor.
         client:   the document's client. Defaults to ``document.client``.
                   For a document with no client this is ``None``.
-        document: the GeneratedDocument being rendered.
+        document: the GeneratedDocument being rendered. May be ``None`` for a
+                  non-persistent preview, in which case the explicit
+                  ``document_number`` / ``document_date`` / ``document_type_name``
+                  and ``items`` must be supplied and ``company`` is the tenant
+                  anchor.
         require_client: when True (default), a document with no client is a
                   hard error (client.name is a required variable).
         version: the GeneratedDocumentVersion whose line items become the
                   ``items`` collection. Defaults to the document's latest
                   version (highest version_number), or an empty collection if
-                  the document has no version.
+                  the document has no version. Ignored when ``items`` is given.
+        document_number / document_date / document_type_name: explicit
+                  ``document.*`` overrides (preview only); each defaults to the
+                  corresponding value on ``document``.
+        items:    explicit line-item snapshots for the ``items`` collection
+                  (preview only). When given, no version/line-item lookup runs.
 
     Returns a nested dict::
 
@@ -214,16 +260,28 @@ def build_generation_context(company=None, client=None, document=None, *, requir
     Raises:
         GenerationContextError on tenant mismatch or missing required data.
     """
-    if document is None:
-        raise GenerationContextError("A GeneratedDocument is required.")
-    if client is None:
-        client = document.client
-    if company is None:
-        company = document.company
+    if document is None and (
+        document_number is None
+        or document_date is None
+        or document_type_name is None
+    ):
+        raise GenerationContextError(
+            "A GeneratedDocument is required, or explicit document number, "
+            "date and type must be supplied."
+        )
+    if document is not None:
+        if client is None:
+            client = document.client
+        if company is None:
+            company = document.company
 
     _assert_tenant_consistent(company, client, document)
 
     if version is not None:
+        if document is None:
+            raise GenerationContextError(
+                "A document is required when an explicit version is supplied."
+            )
         if version.generated_document_id != document.id:
             raise GenerationContextError(
                 "The provided version does not belong to the document "
@@ -234,7 +292,7 @@ def build_generation_context(company=None, client=None, document=None, *, requir
                 "The provided version does not match the document's company "
                 "(tenant mismatch)."
             )
-    else:
+    elif document is not None:
         version = (
             document.versions.order_by("-version_number").first()
         )
@@ -249,8 +307,13 @@ def build_generation_context(company=None, client=None, document=None, *, requir
     return {
         "company": build_company_context(company),
         "client": client_context,
-        "document": build_document_context(document),
-        "items": build_line_items_context(version),
+        "document": build_document_context(
+            document,
+            number=document_number,
+            date=document_date,
+            type_name=document_type_name,
+        ),
+        "items": build_line_items_context(version, items=items),
     }
 
 

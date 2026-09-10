@@ -10,6 +10,7 @@ import {
   getGeneratedDocument,
   listGeneratedDocumentVersions,
   listGeneratedDocuments,
+  previewGeneratedDocument,
 } from './documents'
 import { generatedDocuments, jsonResponse } from '../test/documentFixtures'
 import { ApiError, HTTP_STATUS } from '../types/api'
@@ -189,6 +190,47 @@ describe('documents API', () => {
     expect(JSON.parse(String(init.body))).toEqual(body)
     expect(fetchMock.mock.calls).toHaveLength(1)
     expect(result).toEqual(generatedDocuments[0])
+  })
+
+  it('renders a preview PDF via the authenticated preview endpoint', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(new Blob(['%PDF-preview'], { type: 'application/pdf' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/pdf' },
+      }),
+    )
+    setAccessToken('token-1')
+
+    const body: CreateGeneratedDocumentInput = {
+      client_id: 1,
+      document_type_id: 2,
+      currency_id: 1,
+      items: [{ description: 'Consulting hours', quantity: 10, unit_price: 100, vat_rate_percent: 18 }],
+    }
+    const result = await previewGeneratedDocument(body)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/generated-documents/preview/')
+    expect(init.method).toBe('POST')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-1')
+    expect(new Headers(init.headers).get('Accept')).toBe('*/*')
+    expect(JSON.parse(String(init.body))).toEqual(body)
+    expect(result).toBeInstanceOf(Blob)
+  })
+
+  it('propagates a preview failure as a typed ApiError', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(503, { detail: 'PDF preview is currently unavailable.' }),
+    )
+
+    await expect(
+      previewGeneratedDocument({
+        client_id: 1,
+        document_type_id: 2,
+        currency_id: 1,
+        items: [],
+      }),
+    ).rejects.toMatchObject({ status: 503 })
   })
 
   it('propagates an atomic generation failure as a typed ApiError', async () => {

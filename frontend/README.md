@@ -26,6 +26,12 @@ Implemented so far:
   **and** generates its DOCX + PDF through the backend's atomic
   generate-from-input endpoint. No persistent draft is created beforehand; a
   failed generation leaves nothing behind.
+- **Document preview** (Phase 6.6): on `/documents/new`, **Preview** renders the
+  current form data through the authenticated non-persistent preview endpoint
+  into a temporary `blob:` PDF shown in the browser — no document, version,
+  line item, audit event, document number, or stored file is ever created.
+  Changing a relevant input clears the stale preview and requires Preview again.
+  **Generate** remains the only action that creates the persistent document.
 - **Generated documents list** (Phase 6.1): `/documents` shows the real
   generated documents for the authenticated company (no search/filter/
   pagination — the backend supports none).
@@ -310,6 +316,7 @@ sends `company_id`).
 | `GET /api/generated-documents/:id/` | **detail** | `getGeneratedDocument(id)` |
 | `POST /api/generated-documents/` | **create** a document (201, draft) — retained API, no longer used by the form | `createGeneratedDocument(input)` |
 | `POST /api/generated-documents/generate-from-input/` | **atomic Generate**: create + DOCX + PDF in one transaction (201) | `generateDocumentFromInput(input)` |
+| `POST /api/generated-documents/preview/` | **non-persistent PDF preview** (200, `application/pdf`) | `previewGeneratedDocument(input)` |
 | `POST /api/generated-documents/:id/generate/` | **generate DOCX** (201, synchronous) | `generateDocumentDocx(id)` |
 | `POST /api/generated-documents/versions/:versionId/generate-pdf/` | **generate PDF** (synchronous) | `generateGeneratedDocumentPdf(versionId)` |
 | `GET /api/generated-documents/:id/versions/` | version list (`storage.docx`/`storage.pdf`) | `listGeneratedDocumentVersions(id)` |
@@ -389,15 +396,11 @@ and exposes a "Generated file" section using the actual version state
 
 ### Creating a document (`/documents/new`)
 
-`DocumentCreatePage` (`src/pages/documents/`) generates a document through the
-real atomic `POST /api/generated-documents/generate-from-input/` endpoint
-using the fields the backend `GeneratedDocumentCreateSerializer` accepts.
-The form state stays entirely local until **Generate** is clicked — opening
-the page, filling fields, abandoning the form, or failing validation sends no
-request and creates no persistent draft. A failed generation likewise leaves
-no document, version, number, or files behind; a success returns the created
-document (status `generated`, version 1 with DOCX + PDF) and navigates to its
-detail page:
+`DocumentCreatePage` (`src/pages/documents/`) offers a **Preview / Generate**
+workflow. The form state stays entirely local — opening the page, filling
+fields, abandoning the form, or failing validation sends no request and
+creates no persistent draft. `company_id` is never sent; the backend derives
+the tenant from the authenticated user.
 
 - **Client** (required) — from `listClients()` (`GET /api/clients/`).
 - **Document type** (required) — from `fetchDocumentTypes()`
@@ -413,16 +416,38 @@ detail page:
   add, edit, and remove rows. Totals (`subtotal`/`vat_amount`/`total`) and the
   document number are computed **server-side** and never submitted.
 
-Dependencies load independently with their own retry; a failed catalog is shown
-as an error, never as a silently empty list. Generate disables the button,
-prevents duplicate POSTs (exactly one request per generation), and on success
-navigates to the created document's detail page using the document id returned
-by the backend. On failure the form stays open with the backend message and
-navigates nowhere.
+#### Preview (non-persistent)
+
+**Preview** posts the current form state to the authenticated
+`POST /api/generated-documents/preview/` endpoint, which renders the selected
+company template with the real generation pipeline (same context builder,
+placeholder engine, and DOCX → PDF converter as Generate) and returns the PDF
+bytes. The page turns those bytes into a temporary `blob:` URL shown in a
+native `<iframe>` — the user sees the actual layout/tables/placeholders, never
+an HTML approximation and never a `/media/...` URL.
+
+Preview is completely non-persistent: no `GeneratedDocument`, version, line
+item, audit event, or stored file is created, and no document number is
+consumed (the preview renders the provisional number `PREVIEW`). A preview
+reflects a specific form state: changing any relevant input (client, document
+type, currency, or any line-item field) clears and revokes the stale preview
+and requires Preview to be clicked again. Preview errors (invalid data, no
+active template/version, invalid placeholders, PDF conversion unavailable, 403/
+404/429/5xx) render separately from Generate errors and leave nothing behind.
+
+#### Generate (persistent)
+
+**Generate** posts to the real atomic
+`POST /api/generated-documents/generate-from-input/` endpoint using the same
+form fields. The backend creates the document (status `generated`, version 1
+with DOCX + PDF) in one transaction; a failure leaves no document, version,
+number, or files behind. Generate disables the button, prevents duplicate
+POSTs (exactly one request per generation), and on success navigates to the
+created document's detail page using the document id returned by the backend.
+On failure the form stays open with the backend message and navigates nowhere.
 Backend field errors render next to the matching control, nested line-item
 errors render on the offending row, and `detail` messages (e.g. missing active
-template) render as a form-level message. `company_id` is never sent; the
-backend derives the tenant from the authenticated user.
+template) render as a form-level message.
 
 ## Audit logs
 
@@ -600,7 +625,11 @@ detail version list alongside the untouched activation action), and the generate
  created detail page, generation failure without navigation, list → create /
  create → detail / list → detail / detail → list navigation,
  duplicate-submit prevention, backend field / nested line-item / non-field
- errors, cancellation), the detail page
+ errors, cancellation), preview (no preview request before clicking Preview,
+ exactly one authenticated preview POST with the current form state, `blob:`
+ iframe rendering, preview failure without navigation or Generate request,
+ stale-preview invalidation + object-URL revocation on input changes,
+ duplicate-preview prevention while in flight), the detail page
 (loading, metadata
 rendering incl. status badge and client/template links, non-numeric id, 404 /
 403 / generic error / retry, back navigation), DOCX generation + download

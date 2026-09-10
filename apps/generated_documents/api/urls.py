@@ -5,6 +5,7 @@ from apps.generated_documents.api.views import (
     GeneratedDocumentGenerateFromInputView,
     GeneratedDocumentGenerateView,
     GeneratedDocumentListView,
+    GeneratedDocumentPreviewView,
     GeneratedDocumentVersionDocxDownloadView,
     GeneratedDocumentVersionGeneratePdfView,
     GeneratedDocumentVersionListView,
@@ -21,6 +22,11 @@ urlpatterns = [
         "generate-from-input/",
         GeneratedDocumentGenerateFromInputView.as_view(),
         name="generated-document-generate-from-input",
+    ),
+    path(
+        "preview/",
+        GeneratedDocumentPreviewView.as_view(),
+        name="generated-document-preview",
     ),
     path(
         "<int:pk>/",

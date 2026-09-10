@@ -16,6 +16,7 @@ attachment response; storage paths are never exposed to clients.
 """
 
 import re
+from io import BytesIO
 
 from django.core.files.storage import default_storage
 from django.db import IntegrityError
@@ -49,6 +50,7 @@ from apps.generated_documents.services.generator import (
     GenerationError,
     generate_document,
 )
+from apps.generated_documents.services.preview import preview_document
 from apps.generated_documents.services.pdf_generator import (
     PdfConversionUnavailableError,
     PdfGenerationError,
@@ -320,6 +322,94 @@ class GeneratedDocumentGenerateFromInputView(MethodPermissionAPIView):
         return Response(
             GeneratedDocumentSerializer(document).data,
             status=status.HTTP_201_CREATED,
+        )
+
+
+class GeneratedDocumentPreviewView(MethodPermissionAPIView):
+    """
+    POST .../generated-documents/preview/ — render the current form data into a
+    temporary PDF preview.
+
+    Accepts the same body as generation (client_id, document_type_id,
+    currency_id, optional items) and reuses the exact generation pipeline
+    (context builder, placeholder engine, DOCX -> PDF converter), but persists
+    nothing: no document, version, line items, audit event, consumed number, or
+    stored file. The preview uses the provisional number ``PREVIEW``. Returns
+    the PDF bytes with 200.
+    """
+
+    method_permissions = {"POST": "generated_documents.generate"}
+    throttle_scope = "document_generation"
+
+    def post(self, request):
+        serializer = GeneratedDocumentCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        # The client must belong to the caller's company; a cross-company or
+        # missing client is indistinguishable and resolves to 404 (Rule D).
+        client = get_tenant_object_or_404(
+            Client,
+            request.user.company,
+            pk=serializer.validated_data["client_id"],
+            deleted_at__isnull=True,
+        )
+        try:
+            pdf_bytes = preview_document(
+                company=request.user.company,
+                client=client,
+                document_type_id=serializer.validated_data["document_type_id"],
+                currency_id=serializer.validated_data.get("currency_id"),
+                items=serializer.validated_data.get("items"),
+            )
+        except DocumentCreationError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except GenerationContextError:
+            return Response(
+                {
+                    "detail": (
+                        "Preview failed because required document data is "
+                        "missing."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except PlaceholderEngineError:
+            return Response(
+                {
+                    "detail": (
+                        "Preview failed because the template contains invalid "
+                        "placeholders."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except GenerationError:
+            return Response(
+                {
+                    "detail": (
+                        "Preview failed. Check the document, client, and "
+                        "template version data."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except PdfConversionUnavailableError:
+            return Response(
+                {"detail": "PDF preview is currently unavailable."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except PdfGenerationError:
+            return Response(
+                {"detail": "PDF preview failed for this document."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return FileResponse(
+            BytesIO(pdf_bytes),
+            as_attachment=False,
+            filename="preview.pdf",
+            content_type=PDF_MIME,
         )
 
 

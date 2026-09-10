@@ -275,6 +275,10 @@ export const apiClient = {
   ) => request<T>(path, { ...options, method: 'PATCH', body }),
   delete: <T>(path: string, options?: Omit<ApiRequestOptions, 'method' | 'body'>) =>
     request<T>(path, { ...options, method: 'DELETE' }),
-  raw: (path: string, options?: Omit<ApiRequestOptions, 'method' | 'body'>) =>
-    request<Response>(path, { ...options, method: 'GET', raw: true }),
+  // Returns the unparsed Response for authenticated binary/both-direction
+  // requests. Defaults to GET; pass `{ method, body }` for e.g. a POST that
+  // returns a binary body. Bearer auth, 401 refresh/retry and typed errors are
+  // unchanged.
+  raw: (path: string, options?: ApiRequestOptions) =>
+    request<Response>(path, { ...options, raw: true }),
 }

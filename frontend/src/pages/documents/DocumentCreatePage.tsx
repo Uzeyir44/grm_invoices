@@ -2,13 +2,14 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
 } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { listClients } from '../../api/clients'
-import { generateDocumentFromInput } from '../../api/documents'
+import { generateDocumentFromInput, previewGeneratedDocument } from '../../api/documents'
 import { fetchCurrencies, fetchDocumentTypes } from '../../api/referenceData'
 import { listTemplates } from '../../api/templates'
 import { Button } from '../../components/ui/Button'
@@ -145,6 +146,25 @@ function formMessageFor(error: ApiError, fieldErrors: Errors): string | undefine
   return error.fieldErrors.non_field_errors?.[0]
 }
 
+function previewMessageFor(error: unknown, fallback: string): string {
+  if (!(error instanceof ApiError)) return fallback
+  if (error.status === HTTP_STATUS.FORBIDDEN) {
+    return 'You do not have permission to preview documents.'
+  }
+  if (error.status === HTTP_STATUS.NOT_FOUND) {
+    return 'The selected client or template was not found in your company.'
+  }
+  if (error.status === HTTP_STATUS.PAYLOAD_TOO_LARGE) {
+    return 'The document is too large to preview.'
+  }
+  if (error.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
+    return error.retryAfterSeconds !== null
+      ? `Too many attempts. Please wait ${error.retryAfterSeconds} seconds and try again.`
+      : 'Too many attempts. Please wait a moment and try again.'
+  }
+  return error.message || fallback
+}
+
 /**
  * Generate-document form (`POST /api/generated-documents/generate-from-input/`),
  * backed by the existing real clients / reference-data / templates APIs. The
@@ -176,6 +196,38 @@ export function DocumentCreatePage() {
   const [formError, setFormError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
 
+  const [previewing, setPreviewing] = useState(false)
+  const [previewError, setPreviewError] = useState<string>()
+  const [previewUrl, setPreviewUrl] = useState<string>()
+  const previewUrlRef = useRef<string | undefined>(undefined)
+
+  // Revoke the current preview's object URL (if any) and drop it from state.
+  const clearPreview = useCallback(() => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = undefined
+    }
+    setPreviewUrl(undefined)
+  }, [])
+
+  // A preview reflects a specific form state; invalidate it whenever a
+  // relevant input changes so a stale PDF is never mistaken for the current
+  // data. The user must click Preview again.
+  const invalidatePreview = useCallback(() => {
+    clearPreview()
+    setPreviewError(undefined)
+  }, [clearPreview])
+
+  // Release the last object URL when the page unmounts.
+  useEffect(() => {
+    return () => {
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current)
+        previewUrlRef.current = undefined
+      }
+    }
+  }, [])
+
   // Which document types the company has an active template for. Only used as
   // a UX hint: when known, types without an active template are hidden from
   // the dropdown (the backend would reject them anyway). The backend remains
@@ -198,14 +250,17 @@ export function DocumentCreatePage() {
   const currencyOptions = currencies.status === 'ready' ? currencies.data : []
 
   function addItem() {
+    invalidatePreview()
     setItems((prev) => [...prev, emptyItemRow(newItemKey())])
   }
 
   function removeItem(index: number) {
+    invalidatePreview()
     setItems((prev) => prev.filter((_, i) => i !== index))
   }
 
   function updateItem(index: number, field: keyof ItemRow, value: string) {
+    invalidatePreview()
     setItems((prev) => prev.map((row, i) => (i === index ? { ...row, [field]: value } : row)))
   }
 
@@ -248,18 +303,47 @@ export function DocumentCreatePage() {
     }
   }
 
+  // Run local validation and render the errors; returns true when the form is
+  // invalid (callers must then send no request).
+  function applyValidation(): boolean {
+    const local = validate()
+    setFieldErrors(local.fieldErrors)
+    setItemErrors(local.itemErrors)
+    return (
+      Object.keys(local.fieldErrors).length > 0 ||
+      local.itemErrors.some((row) => Object.keys(row).length > 0)
+    )
+  }
+
+  async function handlePreview() {
+    if (previewing) return
+    setPreviewError(undefined)
+    if (applyValidation()) return
+
+    setPreviewing(true)
+    try {
+      const blob = await previewGeneratedDocument(buildPayload())
+      if (typeof URL.createObjectURL !== 'function') {
+        setPreviewError('Preview is not supported in this browser.')
+        return
+      }
+      clearPreview()
+      const url = URL.createObjectURL(blob)
+      previewUrlRef.current = url
+      setPreviewUrl(url)
+    } catch (error) {
+      setPreviewError(previewMessageFor(error, 'Could not generate the preview.'))
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (submitting) return
 
-    const local = validate()
-    setFieldErrors(local.fieldErrors)
-    setItemErrors(local.itemErrors)
     setFormError(undefined)
-    const hasErrors =
-      Object.keys(local.fieldErrors).length > 0 ||
-      local.itemErrors.some((row) => Object.keys(row).length > 0)
-    if (hasErrors) return
+    if (applyValidation()) return
 
     setSubmitting(true)
     try {
@@ -340,7 +424,10 @@ export function DocumentCreatePage() {
                 id="client_id"
                 name="client_id"
                 value={clientId}
-                onChange={(event) => setClientId(event.target.value)}
+                onChange={(event) => {
+                  invalidatePreview()
+                  setClientId(event.target.value)
+                }}
                 className={FIELD_INPUT_CLASS}
                 aria-invalid={Boolean(fieldErrors.client_id)}
                 aria-describedby={fieldErrors.client_id ? 'client_id-error' : undefined}
@@ -364,7 +451,10 @@ export function DocumentCreatePage() {
                 id="document_type_id"
                 name="document_type_id"
                 value={documentTypeId}
-                onChange={(event) => setDocumentTypeId(event.target.value)}
+                onChange={(event) => {
+                  invalidatePreview()
+                  setDocumentTypeId(event.target.value)
+                }}
                 className={FIELD_INPUT_CLASS}
                 aria-invalid={Boolean(fieldErrors.document_type_id)}
                 aria-describedby={
@@ -385,7 +475,10 @@ export function DocumentCreatePage() {
                 id="currency_id"
                 name="currency_id"
                 value={currencyId}
-                onChange={(event) => setCurrencyId(event.target.value)}
+                onChange={(event) => {
+                  invalidatePreview()
+                  setCurrencyId(event.target.value)
+                }}
                 className={FIELD_INPUT_CLASS}
                 aria-invalid={Boolean(fieldErrors.currency_id)}
                 aria-describedby={fieldErrors.currency_id ? 'currency_id-error' : undefined}
@@ -434,7 +527,16 @@ export function DocumentCreatePage() {
             </p>
           ) : null}
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              variant="secondary"
+              loading={previewing}
+              loadingLabel="Previewing…"
+              onClick={handlePreview}
+            >
+              Preview
+            </Button>
             <Button type="submit" loading={submitting} loadingLabel="Generating…">
               Generate
             </Button>
@@ -444,6 +546,40 @@ export function DocumentCreatePage() {
           </div>
         </form>
       </div>
+
+      {previewError ? (
+        <p
+          role="alert"
+          className="rounded-md bg-red-50 px-4 py-3 text-sm text-red-700"
+        >
+          {previewError}
+        </p>
+      ) : null}
+
+      {previewUrl ? (
+        <section aria-label="Document preview" className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-700">Preview</h2>
+            <button
+              type="button"
+              onClick={clearPreview}
+              className="text-sm text-slate-600 underline hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-500"
+            >
+              Close preview
+            </button>
+          </div>
+          <iframe
+            src={previewUrl}
+            title="Document preview"
+            data-testid="document-preview"
+            className="h-[600px] w-full rounded-lg border border-slate-200 bg-white"
+          />
+          <p className="text-xs text-slate-500">
+            Preview only — no document is created yet. Click Generate to create
+            the document.
+          </p>
+        </section>
+      ) : null}
     </PageContainer>
   )
 }

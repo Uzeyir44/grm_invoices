@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -46,8 +46,18 @@ describe('DocumentCreatePage', () => {
   const fetchMock = vi.fn()
   const user = userEvent.setup()
 
+  function previewPdfResponse(): Response {
+    return new Response(new Blob(['%PDF-preview'], { type: 'application/pdf' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/pdf' },
+    })
+  }
+
   function stubBackend(
-    overrides: { create?: (input: RequestInfo | URL) => Promise<Response> } = {},
+    overrides: {
+      create?: (input: RequestInfo | URL) => Promise<Response>
+      preview?: (input: RequestInfo | URL) => Promise<Response>
+    } = {},
   ) {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -55,6 +65,10 @@ describe('DocumentCreatePage', () => {
       if (method === 'POST' && url.endsWith('/generated-documents/generate-from-input/')) {
         if (overrides.create) return overrides.create(input)
         return Promise.resolve(jsonResponse(201, createdDocument))
+      }
+      if (method === 'POST' && url.endsWith('/generated-documents/preview/')) {
+        if (overrides.preview) return overrides.preview(input)
+        return Promise.resolve(previewPdfResponse())
       }
       if (url.includes('/clients/')) return Promise.resolve(jsonResponse(200, clients))
       if (url.includes('/reference-data/document-types/')) {
@@ -81,6 +95,16 @@ describe('DocumentCreatePage', () => {
       const initObject = init as RequestInit | undefined
       return (
         String(url).endsWith('/generated-documents/generate-from-input/') &&
+        (initObject?.method ?? 'GET') === 'POST'
+      )
+    })
+  }
+
+  function previewCalls() {
+    return fetchMock.mock.calls.filter(([url, init]) => {
+      const initObject = init as RequestInit | undefined
+      return (
+        String(url).endsWith('/generated-documents/preview/') &&
         (initObject?.method ?? 'GET') === 'POST'
       )
     })
@@ -169,8 +193,132 @@ describe('DocumentCreatePage', () => {
     await user.type(screen.getByLabelText(/description/i), 'Consulting hours')
 
     // Opening the page and filling the form must not create any draft: the
-    // atomic Generate endpoint is only called when Generate is clicked.
+    // atomic Generate endpoint and the preview endpoint are only called when
+    // their buttons are clicked.
     expect(postCalls()).toHaveLength(0)
+    expect(previewCalls()).toHaveLength(0)
+  })
+
+  it('previews the current form state into a PDF iframe with exactly one request', async () => {
+    const createSpy = vi.fn(() => 'blob:preview')
+    const originalCreate = URL.createObjectURL
+    URL.createObjectURL = createSpy
+    try {
+      stubBackend()
+      renderCreate()
+      await screen.findByLabelText(/client/i)
+      await fillRequiredSelections()
+      await user.click(screen.getByRole('button', { name: /add line item/i }))
+      await user.type(screen.getByLabelText(/description/i), 'Consulting hours')
+      await user.type(screen.getByLabelText(/quantity/i), '10')
+      await user.type(screen.getByLabelText(/unit price/i), '100')
+      await user.type(screen.getByLabelText(/vat %/i), '18')
+
+      await user.click(screen.getByRole('button', { name: /^preview$/i }))
+
+      const iframe = await screen.findByTestId('document-preview')
+      expect(iframe).toHaveAttribute('src', 'blob:preview')
+
+      const calls = previewCalls()
+      expect(calls).toHaveLength(1)
+      const [url, init] = calls[0] as [string, RequestInit]
+      expect(url).toBe('/api/generated-documents/preview/')
+      expect(JSON.parse(String(init.body))).toEqual({
+        client_id: 1,
+        document_type_id: 1,
+        currency_id: 1,
+        items: [
+          {
+            description: 'Consulting hours',
+            quantity: 10,
+            unit: null,
+            unit_price: 100,
+            discount_percent: 0,
+            vat_rate_percent: 18,
+          },
+        ],
+      })
+      // A preview is not a generate: no atomic Generate request is sent.
+      expect(postCalls()).toHaveLength(0)
+    } finally {
+      URL.createObjectURL = originalCreate
+    }
+  })
+
+  it('shows an error and stays on the page when preview fails', async () => {
+    stubBackend({
+      preview: () =>
+        Promise.resolve(
+          jsonResponse(400, {
+            detail: 'Preview failed. Check the document, client, and template version data.',
+          }),
+        ),
+    })
+    renderCreate()
+    await screen.findByLabelText(/client/i)
+    await fillRequiredSelections()
+
+    await user.click(screen.getByRole('button', { name: /^preview$/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Preview failed/i)
+    expect(screen.queryByTestId('document-preview')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('detail-view')).not.toBeInTheDocument()
+    expect(previewCalls()).toHaveLength(1)
+    expect(postCalls()).toHaveLength(0)
+  })
+
+  it('clears and revokes the preview when a relevant input changes', async () => {
+    const createSpy = vi.fn(() => 'blob:preview')
+    const revokeSpy = vi.fn()
+    const originalCreate = URL.createObjectURL
+    const originalRevoke = URL.revokeObjectURL
+    URL.createObjectURL = createSpy
+    URL.revokeObjectURL = revokeSpy
+    try {
+      stubBackend()
+      renderCreate()
+      await screen.findByLabelText(/client/i)
+      await fillRequiredSelections()
+
+      await user.click(screen.getByRole('button', { name: /^preview$/i }))
+      await screen.findByTestId('document-preview')
+
+      // Changing a relevant input invalidates the stale preview: the PDF
+      // disappears and its object URL is revoked.
+      await user.click(screen.getByRole('button', { name: /add line item/i }))
+
+      expect(screen.queryByTestId('document-preview')).not.toBeInTheDocument()
+      expect(revokeSpy).toHaveBeenCalledWith('blob:preview')
+    } finally {
+      URL.createObjectURL = originalCreate
+      URL.revokeObjectURL = originalRevoke
+    }
+  })
+
+  it('prevents duplicate preview requests while one is in flight', async () => {
+    let resolvePreview: (value: Response) => void = () => {}
+    stubBackend({
+      preview: () =>
+        new Promise<Response>((resolve) => {
+          resolvePreview = resolve
+        }),
+    })
+    renderCreate()
+    await screen.findByLabelText(/client/i)
+    await fillRequiredSelections()
+
+    await user.click(screen.getByRole('button', { name: /^preview$/i }))
+
+    const previewing = screen.getByRole('button', { name: /previewing/i })
+    expect(previewing).toBeDisabled()
+    await user.click(previewing)
+    expect(previewCalls()).toHaveLength(1)
+
+    resolvePreview(previewPdfResponse())
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^preview$/i })).toBeEnabled(),
+    )
+    expect(previewCalls()).toHaveLength(1)
   })
 
   it('generates a document with exactly one request and navigates to its detail page using the real id', async () => {
