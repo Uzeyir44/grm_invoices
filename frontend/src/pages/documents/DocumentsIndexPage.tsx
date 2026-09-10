@@ -132,7 +132,11 @@ export function DocumentsIndexPage() {
                         {document.document_type_code || document.document_type}
                       </td>
                       <td className="px-4 py-3 text-slate-600">
-                        {document.client_id ? `Client #${document.client_id}` : '—'}
+                        {document.client_name
+                          ? `${document.client_name} (Client #${document.client_id})`
+                          : document.client_id
+                            ? `Client #${document.client_id}`
+                            : '—'}
                       </td>
                       <td className="px-4 py-3">
                         <DocumentStatusBadge status={document.status} />

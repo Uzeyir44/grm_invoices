@@ -147,14 +147,7 @@ class ClientSummarySerializer(serializers.ModelSerializer):
         fields = ["id", "client_type", "status", "display_name", "company_id"]
 
     def get_display_name(self, obj):
-        try:
-            if obj.client_type == Client.ClientType.INDIVIDUAL:
-                individual = obj.individual
-                return f"{individual.first_name} {individual.last_name}".strip()
-            legal_entity = obj.legal_entity
-            return legal_entity.legal_name if legal_entity else ""
-        except (ClientIndividual.DoesNotExist, ClientLegalEntity.DoesNotExist):
-            return ""
+        return obj.get_display_name() or ""
 
 
 class ClientSerializer(serializers.ModelSerializer):

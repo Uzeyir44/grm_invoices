@@ -294,7 +294,9 @@ export function DocumentDetailPage() {
                   to={`/clients/${generatedDocument.client_id}`}
                   className="underline hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-500"
                 >
-                  Client #{generatedDocument.client_id}
+                  {generatedDocument.client_name
+                    ? `${generatedDocument.client_name} (Client #${generatedDocument.client_id})`
+                    : `Client #${generatedDocument.client_id}`}
                 </Link>
               ) : (
                 '—'
@@ -309,7 +311,9 @@ export function DocumentDetailPage() {
                   to={`/templates/${generatedDocument.template_id}`}
                   className="underline hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-500"
                 >
-                  Template #{generatedDocument.template_id}
+                  {generatedDocument.template_name
+                    ? `${generatedDocument.template_name} (Template #${generatedDocument.template_id})`
+                    : `Template #${generatedDocument.template_id}`}
                 </Link>
               ) : (
                 '—'
@@ -327,7 +331,11 @@ export function DocumentDetailPage() {
           {generatedDocument.created_by_id ? (
             <div>
               <dt className="text-slate-500">Created by</dt>
-              <dd className="text-slate-900">User #{generatedDocument.created_by_id}</dd>
+              <dd className="text-slate-900">
+                {generatedDocument.created_by_name
+                  ? `${generatedDocument.created_by_name} (User #${generatedDocument.created_by_id})`
+                  : `User #${generatedDocument.created_by_id}`}
+              </dd>
             </div>
           ) : null}
         </dl>

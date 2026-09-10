@@ -42,6 +42,9 @@ from apps.generated_documents.services.document_creation import (
     DocumentCreationError,
     create_generated_document,
 )
+from apps.generated_documents.services.generate_from_input import (
+    generate_document_from_input,
+)
 from apps.generated_documents.services.generator import (
     GenerationError,
     generate_document,
@@ -166,9 +169,20 @@ class GeneratedDocumentListView(MethodPermissionAPIView):
     throttle_scope = "document_creation"
 
     def get(self, request):
+        # select_related feeds the *_name / *_code display fields (client +
+        # subtype, template, acting user, document type) without a query per
+        # row. Soft-deleted clients still resolve: the lookup is by FK, so a
+        # document keeps its client name after the client is soft-deleted.
         queryset = (
             tenant_queryset(GeneratedDocument, request.user.company)
             .filter(deleted_at__isnull=True)
+            .select_related(
+                "client__legal_entity",
+                "client__individual",
+                "template",
+                "created_by",
+                "document_type",
+            )
             .order_by("-created_at")
         )
         return Response(GeneratedDocumentSerializer(queryset, many=True).data)
@@ -216,6 +230,97 @@ class GeneratedDocumentDetailView(MethodPermissionAPIView):
     def get(self, request, pk):
         document = document_object_or_404(request, pk)
         return Response(GeneratedDocumentSerializer(document).data)
+
+
+class GeneratedDocumentGenerateFromInputView(MethodPermissionAPIView):
+    """
+    POST .../generated-documents/generate-from-input/ — atomically create a
+    document from creation input AND generate its DOCX + PDF as version 1.
+
+    Unlike the historical two-request flow (create a draft, then generate),
+    no persistent document exists unless the whole operation succeeds: the
+    document, its version, line items, audit events and the reserved document
+    number all commit together, and generated files are removed when anything
+    fails. Accepts the same body as document creation (client_id,
+    document_type_id, currency_id, optional items); returns the created
+    GeneratedDocument (201).
+    """
+
+    method_permissions = {"POST": "generated_documents.generate"}
+    throttle_scope = "document_generation"
+
+    def post(self, request):
+        serializer = GeneratedDocumentCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        # The client must belong to the caller's company; a cross-company or
+        # missing client is indistinguishable and resolves to 404 (Rule D).
+        client = get_tenant_object_or_404(
+            Client,
+            request.user.company,
+            pk=serializer.validated_data["client_id"],
+            deleted_at__isnull=True,
+        )
+        meta = request_metadata(request)
+        try:
+            document = generate_document_from_input(
+                company=request.user.company,
+                user=request.user,
+                client=client,
+                document_type_id=serializer.validated_data["document_type_id"],
+                currency_id=serializer.validated_data.get("currency_id"),
+                items=serializer.validated_data.get("items"),
+                ip_address=meta["ip_address"],
+                user_agent=meta["user_agent"],
+            )
+        except DocumentCreationError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except GenerationContextError:
+            return Response(
+                {
+                    "detail": (
+                        "Document generation failed because required data is "
+                        "missing."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except PlaceholderEngineError:
+            return Response(
+                {
+                    "detail": (
+                        "Document generation failed because the template "
+                        "contains invalid placeholders."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except GenerationError:
+            return Response(
+                {
+                    "detail": (
+                        "Document generation failed. Check the document, "
+                        "client, and template version data."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except PdfConversionUnavailableError:
+            return Response(
+                {"detail": "PDF conversion is currently unavailable."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except PdfGenerationError:
+            return Response(
+                {"detail": "PDF generation failed for this document."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            GeneratedDocumentSerializer(document).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class GeneratedDocumentGenerateView(MethodPermissionAPIView):

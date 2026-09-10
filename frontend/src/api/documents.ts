@@ -23,7 +23,15 @@ import type {
  *     `GeneratedDocumentCreateSerializer`: `client_id`, `document_type_id`,
  *     `currency_id`, `items?`. Returns `GeneratedDocument` (201). The generic
  *     client passes DRF field/nested validation errors through as a typed
- *     {@link ApiError}; a missing/cross-company client is a 404.
+ *     {@link ApiError}; a missing/cross-company client is a 404. Retained for
+ *     backward compatibility; the creation form no longer calls it.
+ *   * `POST /generated-documents/generate-from-input/` → **atomic Generate** —
+ *     creates the document (automatic numbering + version 1 + optional line
+ *     items) **and** generates its DOCX + PDF in one backend transaction.
+ *     Same body as the create endpoint. Returns the created
+ *     `GeneratedDocument` (201, status `generated`). A failed generation
+ *     persists nothing: no document, no version, no line items, no audit
+ *     record, no consumed document number, no orphan files.
  *   * `POST /generated-documents/:id/generate/` → **DOCX generation** —
  *     synchronous. No body is required (an optional `currency_id` is
  *     accepted; omitted when unknown). Returns the created
@@ -145,4 +153,17 @@ export function createGeneratedDocument(
   input: CreateGeneratedDocumentInput,
 ): Promise<GeneratedDocument> {
   return apiClient.post<GeneratedDocument>('/generated-documents/', input)
+}
+
+/**
+ * Atomically create a document from form input and generate its DOCX + PDF
+ * (`POST /generated-documents/generate-from-input/`). The backend commits the
+ * document (status `generated`, version 1 with both files) only when the whole
+ * operation succeeds; a failure leaves no persistent draft behind. Returns the
+ * created `GeneratedDocument` (201).
+ */
+export function generateDocumentFromInput(
+  input: CreateGeneratedDocumentInput,
+): Promise<GeneratedDocument> {
+  return apiClient.post<GeneratedDocument>('/generated-documents/generate-from-input/', input)
 }

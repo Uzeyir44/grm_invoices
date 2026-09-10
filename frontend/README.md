@@ -20,9 +20,12 @@ Implemented so far:
   document's metadata (number, document type, status, client/template
   references, created/updated, creator). The documents list links each document
   number to this page.
-- **Generated document creation** (Phase 6.2): `/documents/new` creates a real
+- **Generated document creation** (Phase 6.2): `/documents/new` keeps the form
+  entirely local until the user clicks **Generate**, then creates a real
   generated document (client + document type + currency + optional line items)
-  through the backend creation endpoint.
+  **and** generates its DOCX + PDF through the backend's atomic
+  generate-from-input endpoint. No persistent draft is created beforehand; a
+  failed generation leaves nothing behind.
 - **Generated documents list** (Phase 6.1): `/documents` shows the real
   generated documents for the authenticated company (no search/filter/
   pagination — the backend supports none).
@@ -305,7 +308,8 @@ sends `company_id`).
 |---|---|---|
 | `GET /api/generated-documents/` | list (plain array, **no pagination**) | `listGeneratedDocuments()` / `fetchGeneratedDocuments()` (dashboard alias) |
 | `GET /api/generated-documents/:id/` | **detail** | `getGeneratedDocument(id)` |
-| `POST /api/generated-documents/` | **create** a document (201) | `createGeneratedDocument(input)` |
+| `POST /api/generated-documents/` | **create** a document (201, draft) — retained API, no longer used by the form | `createGeneratedDocument(input)` |
+| `POST /api/generated-documents/generate-from-input/` | **atomic Generate**: create + DOCX + PDF in one transaction (201) | `generateDocumentFromInput(input)` |
 | `POST /api/generated-documents/:id/generate/` | **generate DOCX** (201, synchronous) | `generateDocumentDocx(id)` |
 | `POST /api/generated-documents/versions/:versionId/generate-pdf/` | **generate PDF** (synchronous) | `generateGeneratedDocumentPdf(versionId)` |
 | `GET /api/generated-documents/:id/versions/` | version list (`storage.docx`/`storage.pdf`) | `listGeneratedDocumentVersions(id)` |
@@ -385,9 +389,15 @@ and exposes a "Generated file" section using the actual version state
 
 ### Creating a document (`/documents/new`)
 
-`DocumentCreatePage` (`src/pages/documents/`) creates a document through the
-real `POST /api/generated-documents/` endpoint using the fields the backend
-`GeneratedDocumentCreateSerializer` accepts:
+`DocumentCreatePage` (`src/pages/documents/`) generates a document through the
+real atomic `POST /api/generated-documents/generate-from-input/` endpoint
+using the fields the backend `GeneratedDocumentCreateSerializer` accepts.
+The form state stays entirely local until **Generate** is clicked — opening
+the page, filling fields, abandoning the form, or failing validation sends no
+request and creates no persistent draft. A failed generation likewise leaves
+no document, version, number, or files behind; a success returns the created
+document (status `generated`, version 1 with DOCX + PDF) and navigates to its
+detail page:
 
 - **Client** (required) — from `listClients()` (`GET /api/clients/`).
 - **Document type** (required) — from `fetchDocumentTypes()`
@@ -404,9 +414,11 @@ real `POST /api/generated-documents/` endpoint using the fields the backend
   document number are computed **server-side** and never submitted.
 
 Dependencies load independently with their own retry; a failed catalog is shown
-as an error, never as a silently empty list. Submission disables the button,
-prevents duplicate POSTs, and on success navigates to the created document's
-detail page using the document id returned by the backend.
+as an error, never as a silently empty list. Generate disables the button,
+prevents duplicate POSTs (exactly one request per generation), and on success
+navigates to the created document's detail page using the document id returned
+by the backend. On failure the form stays open with the backend message and
+navigates nowhere.
 Backend field errors render next to the matching control, nested line-item
 errors render on the offending row, and `detail` messages (e.g. missing active
 template) render as a form-level message. `company_id` is never sent; the
@@ -576,16 +588,19 @@ load-error retry, stale-response protection), the version detail page
 429 / generic error + retry, invalid ids without fetching, back navigation,
 stale-response protection, no-mutation guarantee, opening from the template
 detail version list alongside the untouched activation action), and the generated
-documents slice: the documents API module (endpoint, no query params, detail,
-create payload incl. no `company_id`, typed errors), the reference-data
-currency API, the documents list page (loading, data rendering, count, empty
-state, error/retry, no invented search/filter/pagination controls, detail
-links), the create page (loading, per-dependency errors + retry, client /
-document-type / currency options, only document types with an active template,
-line-item add/edit/remove and submission, form validation, successful creation
-+ redirect to the created detail page, list → create / create → detail /
-list → detail / detail → list navigation, duplicate-submit prevention, backend
-field / nested line-item / non-field errors, cancellation), the detail page
+ documents slice: the documents API module (endpoint, no query params, detail,
+ create payload incl. no `company_id`, atomic generate-from-input request +
+ failure mapping, typed errors), the reference-data
+ currency API, the documents list page (loading, data rendering, count, empty
+ state, error/retry, no invented search/filter/pagination controls, detail
+ links), the create page (loading, per-dependency errors + retry, client /
+ document-type / currency options, only document types with an active template,
+ line-item add/edit/remove and submission, form validation, no request before
+ Generate, exactly one atomic request, successful generation + redirect to the
+ created detail page, generation failure without navigation, list → create /
+ create → detail / list → detail / detail → list navigation,
+ duplicate-submit prevention, backend field / nested line-item / non-field
+ errors, cancellation), the detail page
 (loading, metadata
 rendering incl. status badge and client/template links, non-numeric id, 404 /
 403 / generic error / retry, back navigation), DOCX generation + download

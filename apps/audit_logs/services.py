@@ -257,31 +257,6 @@ def format_user_name(first_name, last_name):
     return " ".join(parts) or None
 
 
-def _client_label(client):
-    """
-    Human-readable label for a ``Client``: the legal name, or the
-    individual's full name. ``None`` when the subtype row is missing.
-    """
-    if client.client_type == Client.ClientType.LEGAL_ENTITY:
-        legal = getattr(client, "legal_entity", None)
-        return legal.legal_name if legal is not None else None
-    individual = getattr(client, "individual", None)
-    if individual is None:
-        return None
-    return (
-        " ".join(
-            part
-            for part in (
-                individual.first_name,
-                individual.middle_name,
-                individual.last_name,
-            )
-            if part
-        )
-        or None
-    )
-
-
 def resolve_entity_labels(company_id, logs):
     """
     Batch-resolve human-readable labels for audit rows' entities.
@@ -326,7 +301,7 @@ def resolve_entity_labels(company_id, logs):
             .select_related("legal_entity", "individual")
         )
         for client in clients:
-            labels[("client", client.id)] = _client_label(client)
+            labels[("client", client.id)] = client.get_display_name()
 
     template_ids = wanted.get("document_template", set())
     if template_ids:

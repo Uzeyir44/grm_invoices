@@ -52,6 +52,32 @@ class Client(models.Model):
     def __str__(self):
         return f"Client {self.id} ({self.client_type})"
 
+    def get_display_name(self):
+        """
+        Human-readable label for this client: the legal name, or the
+        individual's full name (first + middle + last). ``None`` when the
+        subtype row is missing.
+        """
+        try:
+            if self.client_type == Client.ClientType.INDIVIDUAL:
+                individual = self.individual
+                return (
+                    " ".join(
+                        part
+                        for part in (
+                            individual.first_name,
+                            individual.middle_name,
+                            individual.last_name,
+                        )
+                        if part
+                    )
+                    or None
+                )
+            legal_entity = self.legal_entity
+            return legal_entity.legal_name if legal_entity else None
+        except (ClientIndividual.DoesNotExist, ClientLegalEntity.DoesNotExist):
+            return None
+
 
 class ClientLegalEntity(models.Model):
     """

@@ -16,6 +16,7 @@ from unittest import mock, skipUnless
 from django.core.files.base import ContentFile
 from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
 from docx import Document
 
 from rest_framework import status
@@ -23,7 +24,7 @@ from rest_framework.test import APITestCase
 
 from apps.authentication.models import Permission, Role, UserRole
 from apps.authentication.tests.test_authentication import make_company, make_user
-from apps.clients.models import Client, ClientLegalEntity
+from apps.clients.models import Client, ClientIndividual, ClientLegalEntity
 from apps.document_templates.models import DocumentTemplate, TemplateVersion
 from apps.generated_documents.models import GeneratedDocument, GeneratedDocumentVersion
 from apps.generated_documents.services.generator import (
@@ -486,3 +487,86 @@ class GeneratePdfApiTests(GeneratedDocumentAPITestCase):
         self.assertNotIn("boom", response.json()["detail"])
         version.refresh_from_db()
         self.assertFalse(version.storage_path_pdf)
+
+
+class DocumentDisplayNameTests(GeneratedDocumentAPITestCase):
+    """client_name / template_name / created_by_name on the document API."""
+
+    def setUp(self):
+        super().setUp()
+        self.grant(self.alice, *READ)
+        self.auth(self.alice)
+
+    def list_rows(self):
+        response = self.client.get(reverse("generated-document-list"))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return {row["id"]: row for row in response.json()}
+
+    def detail_row(self, document_id):
+        response = self.client.get(
+            reverse("generated-document-detail", kwargs={"pk": document_id})
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response.json()
+
+    def test_list_includes_display_names(self):
+        row = self.list_rows()[self.doc_a.id]
+        self.assertEqual(row["client_id"], self.client_a.id)
+        self.assertEqual(row["client_name"], "Acme A")
+        self.assertEqual(row["template_id"], self.template_a.id)
+        self.assertEqual(row["template_name"], "Invoice Template")
+        # doc_a was created without an acting user.
+        self.assertIsNone(row["created_by_id"])
+        self.assertIsNone(row["created_by_name"])
+
+    def test_detail_includes_display_names(self):
+        row = self.detail_row(self.doc_a.id)
+        self.assertEqual(row["client_name"], "Acme A")
+        self.assertEqual(row["template_name"], "Invoice Template")
+
+    def test_created_by_name_matches_user(self):
+        self.doc_a.created_by = self.alice
+        self.doc_a.save(update_fields=["created_by"])
+        row = self.detail_row(self.doc_a.id)
+        self.assertEqual(row["created_by_id"], self.alice.id)
+        self.assertEqual(row["created_by_name"], "Test User")
+
+    def test_created_by_name_null_after_user_deleted(self):
+        carol = make_user(self.company_a, email="carol@example.com")
+        self.doc_a.created_by = carol
+        self.doc_a.save(update_fields=["created_by"])
+        carol.delete()
+        self.doc_a.refresh_from_db()
+        row = self.detail_row(self.doc_a.id)
+        self.assertIsNone(row["created_by_id"])
+        self.assertIsNone(row["created_by_name"])
+
+    def test_null_client_gives_null_client_name(self):
+        doc = self._make_document(
+            self.company_a, None, self.template_a, number="INV-A-002"
+        )
+        row = self.detail_row(doc.id)
+        self.assertIsNone(row["client_id"])
+        self.assertIsNone(row["client_name"])
+
+    def test_individual_client_name(self):
+        client = Client.objects.create(
+            company=self.company_a, client_type=Client.ClientType.INDIVIDUAL
+        )
+        ClientIndividual.objects.create(
+            client=client,
+            company=self.company_a,
+            first_name="John",
+            last_name="Doe",
+        )
+        doc = self._make_document(
+            self.company_a, client, self.template_a, number="INV-A-003"
+        )
+        self.assertEqual(self.detail_row(doc.id)["client_name"], "John Doe")
+
+    def test_soft_deleted_client_still_resolves(self):
+        self.client_a.deleted_at = timezone.now()
+        self.client_a.save(update_fields=["deleted_at"])
+        row = self.detail_row(self.doc_a.id)
+        self.assertEqual(row["client_id"], self.client_a.id)
+        self.assertEqual(row["client_name"], "Acme A")

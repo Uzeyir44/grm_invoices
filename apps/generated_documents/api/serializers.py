@@ -13,19 +13,30 @@ from django.conf import settings
 
 from rest_framework import serializers
 
+from apps.audit_logs.services import format_user_name
 from apps.generated_documents.models import GeneratedDocument, GeneratedDocumentVersion
 
 
 class GeneratedDocumentSerializer(serializers.ModelSerializer):
-    """Metadata of a generated document (its logical identity)."""
+    """
+    Metadata of a generated document (its logical identity).
+
+    ``client_name`` / ``template_name`` / ``created_by_name`` are
+    human-readable display strings riding alongside the stable IDs — never
+    full nested objects. Each is ``None`` when the name is unavailable (no
+    client, deleted user); the IDs remain the authoritative reference.
+    """
 
     company_id = serializers.IntegerField(read_only=True)
     document_type_code = serializers.CharField(
         source="document_type.code", read_only=True
     )
-    client_id = serializers.IntegerField(read_only=True)
+    client_id = serializers.IntegerField(read_only=True, allow_null=True)
+    client_name = serializers.SerializerMethodField()
     template_id = serializers.IntegerField(read_only=True)
-    created_by_id = serializers.IntegerField(read_only=True)
+    template_name = serializers.CharField(source="template.name", read_only=True)
+    created_by_id = serializers.IntegerField(read_only=True, allow_null=True)
+    created_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = GeneratedDocument
@@ -35,14 +46,29 @@ class GeneratedDocumentSerializer(serializers.ModelSerializer):
             "document_type",
             "document_type_code",
             "client_id",
+            "client_name",
             "template_id",
+            "template_name",
             "document_number",
             "status",
             "created_by_id",
+            "created_by_name",
             "created_at",
             "updated_at",
         ]
         read_only_fields = fields
+
+    def get_client_name(self, obj):
+        client = obj.client
+        if client is None:
+            return None
+        return client.get_display_name()
+
+    def get_created_by_name(self, obj):
+        user = obj.created_by
+        if user is None:
+            return None
+        return format_user_name(user.first_name, user.last_name)
 
 
 class GeneratedDocumentVersionSerializer(serializers.ModelSerializer):

@@ -5,6 +5,7 @@ import {
   downloadGeneratedDocumentPdf,
   fetchGeneratedDocuments,
   generateDocumentDocx,
+  generateDocumentFromInput,
   generateGeneratedDocumentPdf,
   getGeneratedDocument,
   listGeneratedDocumentVersions,
@@ -160,6 +161,47 @@ describe('documents API', () => {
     expect(apiError.status).toBe(HTTP_STATUS.BAD_REQUEST)
     expect(apiError.fieldErrors.client_id).toEqual(['This field is required.'])
     expect(apiError.fieldErrors['items.0.quantity']).toEqual(['A valid number is required.'])
+  })
+
+  it('generates a document from input via the atomic endpoint with one request', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(201, generatedDocuments[0]))
+
+    const body: CreateGeneratedDocumentInput = {
+      client_id: 1,
+      document_type_id: 2,
+      currency_id: 1,
+      items: [
+        {
+          description: 'Consulting hours',
+          quantity: 10,
+          unit_price: 100,
+          vat_rate_percent: 18,
+          unit: 'hour',
+          discount_percent: 0,
+        },
+      ],
+    }
+    const result = await generateDocumentFromInput(body)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/generated-documents/generate-from-input/')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual(body)
+    expect(fetchMock.mock.calls).toHaveLength(1)
+    expect(result).toEqual(generatedDocuments[0])
+  })
+
+  it('propagates an atomic generation failure as a typed ApiError', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(400, { detail: 'Document generation failed.' }))
+
+    await expect(
+      generateDocumentFromInput({
+        client_id: 1,
+        document_type_id: 2,
+        currency_id: 1,
+        items: [],
+      }),
+    ).rejects.toMatchObject({ status: HTTP_STATUS.BAD_REQUEST })
   })
 
   it('fetches a single document from the detail endpoint', async () => {

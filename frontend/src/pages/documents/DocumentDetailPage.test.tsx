@@ -129,13 +129,16 @@ describe('DocumentDetailPage', () => {
     expect(screen.getByText('generated')).toBeInTheDocument()
     expect(screen.getByText('Generated')).toBeInTheDocument()
     // Client and template reference the existing, functional detail routes.
-    expect(screen.getByRole('link', { name: 'Client #1' })).toHaveAttribute('href', '/clients/1')
-    expect(screen.getByRole('link', { name: 'Template #1' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Acme Ltd (Client #1)' })).toHaveAttribute(
+      'href',
+      '/clients/1',
+    )
+    expect(screen.getByRole('link', { name: 'Invoice Template (Template #1)' })).toHaveAttribute(
       'href',
       '/templates/1',
     )
     expect(screen.getAllByText('2026-09-04')).toHaveLength(2)
-    expect(screen.getByText('User #1')).toBeInTheDocument()
+    expect(screen.getByText('Test User (User #1)')).toBeInTheDocument()
 
     const detailUrl = String(fetchMock.mock.calls[0][0])
     expect(detailUrl).toBe('/api/generated-documents/9/')

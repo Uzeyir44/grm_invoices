@@ -8,7 +8,7 @@ import {
 import { Link, useNavigate } from 'react-router-dom'
 
 import { listClients } from '../../api/clients'
-import { createGeneratedDocument } from '../../api/documents'
+import { generateDocumentFromInput } from '../../api/documents'
 import { fetchCurrencies, fetchDocumentTypes } from '../../api/referenceData'
 import { listTemplates } from '../../api/templates'
 import { Button } from '../../components/ui/Button'
@@ -146,13 +146,17 @@ function formMessageFor(error: ApiError, fieldErrors: Errors): string | undefine
 }
 
 /**
- * Create-generated-document form (`POST /api/generated-documents/`), backed by
- * the existing real clients / reference-data / templates APIs. Fields follow
+ * Generate-document form (`POST /api/generated-documents/generate-from-input/`),
+ * backed by the existing real clients / reference-data / templates APIs. The
+ * form state stays entirely local until the user clicks Generate: no request
+ * is sent on page load, while filling fields, or on validation failure, so no
+ * persistent draft is ever created beforehand. Fields follow
  * `GeneratedDocumentCreateSerializer` (client, document type, currency, and
  * optional line items); totals and numbering are computed server-side and are
  * never submitted. `company_id` is never sent — the backend owns the tenant.
- * On success the backend's real created-document id is used to open its detail
- * page.
+ * The backend atomically creates the document and generates its DOCX + PDF;
+ * on success the backend's real created-document id is used to open its
+ * detail page, on failure the page stays put with no draft left behind.
  */
 export function DocumentCreatePage() {
   const navigate = useNavigate()
@@ -259,7 +263,7 @@ export function DocumentCreatePage() {
 
     setSubmitting(true)
     try {
-      const created = await createGeneratedDocument(buildPayload())
+      const created = await generateDocumentFromInput(buildPayload())
       navigate(`/documents/${created.id}`)
     } catch (error) {
       if (error instanceof ApiError) {
@@ -431,8 +435,8 @@ export function DocumentCreatePage() {
           ) : null}
 
           <div className="flex items-center gap-3">
-            <Button type="submit" loading={submitting} loadingLabel="Creating…">
-              Create document
+            <Button type="submit" loading={submitting} loadingLabel="Generating…">
+              Generate
             </Button>
             <Link to="/documents" className="text-sm text-slate-600 underline hover:text-slate-900">
               Cancel

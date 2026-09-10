@@ -137,6 +137,7 @@ endpoints (opt-in per view; ordinary read/list endpoints are not rate-limited):
 POST /api/authentication/token/                      auth_login     (per IP)
 POST /api/authentication/token/refresh/              auth_refresh   (per IP)
 POST /api/generated-documents/                       document_creation
+POST /api/generated-documents/generate-from-input/   document_generation
 POST /api/generated-documents/<id>/generate/         document_generation
 POST /api/generated-documents/versions/<id>/generate-pdf/  pdf_generation
 ```
@@ -1160,6 +1161,7 @@ The package lives in `apps/generated_documents/api/` (`serializers.py`,
 ```text
 GET  /api/generated-documents/                              list documents (tenant scope)
 POST /api/generated-documents/                              create a document (numbering + initial version)
+POST /api/generated-documents/generate-from-input/          atomic create + DOCX + PDF (single transaction)
 GET  /api/generated-documents/<id>/                         retrieve a document
 POST /api/generated-documents/<id>/generate/                generate DOCX (Step 4.4 service)
 GET  /api/generated-documents/<id>/versions/                list the document's versions
@@ -1185,6 +1187,20 @@ derive a currency; it returns the newly created `GeneratedDocumentVersion`
 (`201 Created`). Regenerating the same document creates the next version while
 previous versions remain downloadable.
 
+`POST /api/generated-documents/generate-from-input/` accepts the same body as
+document creation (`client_id`, `document_type_id`, `currency_id`, optional
+`items`) and performs the whole workflow — numbering, `GeneratedDocument`
+(status `generated`), `GeneratedDocumentVersion` **v1** with its line items,
+DOCX rendering, PDF conversion, and the `create` / `generate` / `generate_pdf`
+audit events — inside **one** database transaction
+(`apps/generated_documents/services/generate_from_input.py`, reusing the
+existing creation/generation/PDF services). Unlike the two-request flow there
+is no empty shell version: v1 carries both files. Any failure rolls everything
+back — no document, version, line items, audit records, or consumed number
+remain, and already-written files are removed. Requires
+`generated_documents.generate`; throttled under the `document_generation`
+scope.
+
 ### Permissions
 
 Seeded in the data migration `authentication.0005`:
@@ -1195,9 +1211,10 @@ generated_documents.generate  generate a DOCX and convert it to PDF
 ```
 
 Generation and PDF conversion require `generated_documents.generate`; listing
-and downloads require `generated_documents.read`. Enforcement reuses the
-existing `IsCompanyMember` + `permission_required(...)` factory — no second
-permission mechanism.
+and downloads require `generated_documents.read`. The atomic
+`generate-from-input` endpoint likewise requires `generated_documents.generate`.
+Enforcement reuses the existing `IsCompanyMember` + `permission_required(...)`
+factory — no second permission mechanism.
 
 ### Tenant isolation
 

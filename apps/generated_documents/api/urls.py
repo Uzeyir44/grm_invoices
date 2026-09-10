@@ -2,6 +2,7 @@ from django.urls import path
 
 from apps.generated_documents.api.views import (
     GeneratedDocumentDetailView,
+    GeneratedDocumentGenerateFromInputView,
     GeneratedDocumentGenerateView,
     GeneratedDocumentListView,
     GeneratedDocumentVersionDocxDownloadView,
@@ -15,6 +16,11 @@ urlpatterns = [
         "",
         GeneratedDocumentListView.as_view(),
         name="generated-document-list",
+    ),
+    path(
+        "generate-from-input/",
+        GeneratedDocumentGenerateFromInputView.as_view(),
+        name="generated-document-generate-from-input",
     ),
     path(
         "<int:pk>/",

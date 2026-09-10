@@ -52,7 +52,7 @@ describe('DocumentCreatePage', () => {
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
-      if (method === 'POST' && url.includes('/generated-documents/')) {
+      if (method === 'POST' && url.endsWith('/generated-documents/generate-from-input/')) {
         if (overrides.create) return overrides.create(input)
         return Promise.resolve(jsonResponse(201, createdDocument))
       }
@@ -80,7 +80,7 @@ describe('DocumentCreatePage', () => {
     return fetchMock.mock.calls.filter(([url, init]) => {
       const initObject = init as RequestInit | undefined
       return (
-        String(url).endsWith('/generated-documents/') &&
+        String(url).endsWith('/generated-documents/generate-from-input/') &&
         (initObject?.method ?? 'GET') === 'POST'
       )
     })
@@ -142,7 +142,7 @@ describe('DocumentCreatePage', () => {
     expect(optionLabels(typeSelect)).toContain('Invoice')
     expect(optionLabels(typeSelect)).not.toContain('Consulting contract')
     expect(screen.getByRole('option', { name: 'AZN' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /create document/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^generate$/i })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /cancel/i })).toHaveAttribute('href', '/documents')
   })
 
@@ -151,7 +151,7 @@ describe('DocumentCreatePage', () => {
     renderCreate()
     await screen.findByLabelText(/client/i)
 
-    await user.click(screen.getByRole('button', { name: /create document/i }))
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
 
     expect(screen.getByText('A client is required.')).toBeInTheDocument()
     expect(screen.getByText('A document type is required.')).toBeInTheDocument()
@@ -159,7 +159,21 @@ describe('DocumentCreatePage', () => {
     expect(postCalls()).toHaveLength(0)
   })
 
-  it('creates a document and navigates to its detail page using the real id', async () => {
+  it('sends no request while opening the page and filling fields', async () => {
+    stubBackend()
+    renderCreate()
+    await screen.findByLabelText(/client/i)
+    await fillRequiredSelections()
+
+    await user.click(screen.getByRole('button', { name: /add line item/i }))
+    await user.type(screen.getByLabelText(/description/i), 'Consulting hours')
+
+    // Opening the page and filling the form must not create any draft: the
+    // atomic Generate endpoint is only called when Generate is clicked.
+    expect(postCalls()).toHaveLength(0)
+  })
+
+  it('generates a document with exactly one request and navigates to its detail page using the real id', async () => {
     stubBackend()
     renderCreate()
     await screen.findByLabelText(/client/i)
@@ -171,14 +185,17 @@ describe('DocumentCreatePage', () => {
     await user.type(screen.getByLabelText(/unit price/i), '100')
     await user.type(screen.getByLabelText(/vat %/i), '18')
 
-    await user.click(screen.getByRole('button', { name: /create document/i }))
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
 
-    // POST /api/generated-documents/ returns the created document (id 9);
-    // the form must navigate to that real id, not fabricate one.
+    // POST /api/generated-documents/generate-from-input/ returns the created
+    // document (id 9); the form must navigate to that real id, not fabricate
+    // one — and must issue exactly one request (no separate create call).
     const detail = await screen.findByTestId('detail-view')
     expect(detail).toHaveTextContent('9')
-    const [url, init] = postCalls()[0] as [string, RequestInit]
-    expect(url).toBe('/api/generated-documents/')
+    const calls = postCalls()
+    expect(calls).toHaveLength(1)
+    const [url, init] = calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/generated-documents/generate-from-input/')
     expect(JSON.parse(String(init.body))).toEqual({
       client_id: 1,
       document_type_id: 1,
@@ -194,6 +211,26 @@ describe('DocumentCreatePage', () => {
         },
       ],
     })
+  })
+
+  it('shows an error and stays on the page when generation fails', async () => {
+    stubBackend({
+      create: () =>
+        Promise.resolve(jsonResponse(400, { detail: 'Document generation failed.' })),
+    })
+    renderCreate()
+    await screen.findByLabelText(/client/i)
+    await fillRequiredSelections()
+
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
+
+    // A failed Generate shows the backend message and navigates nowhere: no
+    // draft is left behind, so the form stays open for correction/retry.
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /Document generation failed/i,
+    )
+    expect(screen.queryByTestId('detail-view')).not.toBeInTheDocument()
+    expect(postCalls()).toHaveLength(1)
   })
 
   it('submits line items added, edited, and removed correctly', async () => {
@@ -217,7 +254,7 @@ describe('DocumentCreatePage', () => {
     // Remove the second line.
     await user.click(screen.getAllByRole('button', { name: /remove/i })[1])
 
-    await user.click(screen.getByRole('button', { name: /create document/i }))
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
     const detail = await screen.findByTestId('detail-view')
     expect(detail).toHaveTextContent('9')
 
@@ -242,11 +279,11 @@ describe('DocumentCreatePage', () => {
     await screen.findByLabelText(/client/i)
     await fillRequiredSelections()
 
-    await user.click(screen.getByRole('button', { name: /create document/i }))
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
 
-    const creating = screen.getByRole('button', { name: /creating/i })
-    expect(creating).toBeDisabled()
-    await user.click(creating)
+    const generating = screen.getByRole('button', { name: /generating/i })
+    expect(generating).toBeDisabled()
+    await user.click(generating)
     expect(postCalls()).toHaveLength(1)
 
     resolvePost(jsonResponse(201, createdDocument))
@@ -263,7 +300,7 @@ describe('DocumentCreatePage', () => {
     await screen.findByLabelText(/client/i)
     await fillRequiredSelections()
 
-    await user.click(screen.getByRole('button', { name: /create document/i }))
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
 
     expect(await screen.findByText('This field is required.')).toBeInTheDocument()
   })
@@ -286,7 +323,7 @@ describe('DocumentCreatePage', () => {
     await user.type(screen.getByLabelText(/unit price/i), '1')
     await user.type(screen.getByLabelText(/vat %/i), '18')
 
-    await user.click(screen.getByRole('button', { name: /create document/i }))
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
 
     // The error is rendered next to the offending line-item field (it also
     // appears in the form banner, so target the row-level error element).
@@ -307,7 +344,7 @@ describe('DocumentCreatePage', () => {
     await screen.findByLabelText(/client/i)
     await fillRequiredSelections()
 
-    await user.click(screen.getByRole('button', { name: /create document/i }))
+    await user.click(screen.getByRole('button', { name: /^generate$/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       /No active document template exists/i,

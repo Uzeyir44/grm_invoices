@@ -75,25 +75,7 @@ def _client_snapshot(client):
     """
     if client is None:
         return None
-    name = None
-    if client.client_type == Client.ClientType.LEGAL_ENTITY:
-        legal = getattr(client, "legal_entity", None)
-        name = legal.legal_name if legal is not None else None
-    else:
-        individual = getattr(client, "individual", None)
-        if individual is not None:
-            name = (
-                " ".join(
-                    p
-                    for p in (
-                        individual.first_name,
-                        individual.middle_name,
-                        individual.last_name,
-                    )
-                    if p
-                )
-                or None
-            )
+    name = client.get_display_name()
     contact = client.contacts.filter(is_primary=True).first()
     return {
         "client_type": client.client_type,
