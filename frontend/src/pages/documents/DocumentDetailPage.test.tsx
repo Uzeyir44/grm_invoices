@@ -44,6 +44,23 @@ function fileDownloadResponse(kind: 'docx' | 'pdf', filename = `INV-001-v2.${kin
   })
 }
 
+function stubObjectUrl() {
+  const createSpy = vi.fn(() => 'blob:viewer')
+  const revokeSpy = vi.fn()
+  const originalCreate = URL.createObjectURL
+  const originalRevoke = URL.revokeObjectURL
+  URL.createObjectURL = createSpy
+  URL.revokeObjectURL = revokeSpy
+  return {
+    createSpy,
+    revokeSpy,
+    restore() {
+      URL.createObjectURL = originalCreate
+      URL.revokeObjectURL = originalRevoke
+    },
+  }
+}
+
 function renderDetail(path = '/documents/9') {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -565,5 +582,195 @@ describe('DocumentDetailPage', () => {
 
     await user.click(screen.getByRole('link', { name: /back to documents/i }))
     expect(await screen.findByTestId('documents-list')).toBeInTheDocument()
+  })
+
+  it('opens the PDF viewer from the View PDF button with one authenticated request', async () => {
+    const objectUrl = stubObjectUrl()
+    try {
+      stubBackend({ versions: [versionWithPdf] })
+      renderDetail()
+      await screen.findByRole('button', { name: /view pdf/i })
+
+      await user.click(screen.getByRole('button', { name: /view pdf/i }))
+
+      const iframe = await screen.findByTestId('document-pdf-viewer')
+      expect(iframe).toHaveAttribute('src', 'blob:viewer')
+      const pdfCalls = fetchMock.mock.calls.filter(([url, init]) => {
+        const initObject = init as RequestInit | undefined
+        return (
+          String(url).endsWith('/api/generated-documents/versions/22/pdf/') &&
+          (initObject?.method ?? 'GET') === 'GET'
+        )
+      })
+      expect(pdfCalls).toHaveLength(1)
+      // Viewing never generates or regenerates anything.
+      const postCalls = fetchMock.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === 'POST',
+      )
+      expect(postCalls).toHaveLength(0)
+    } finally {
+      objectUrl.restore()
+    }
+  })
+
+  it('auto-opens the PDF viewer from the Documents list View link', async () => {
+    const objectUrl = stubObjectUrl()
+    try {
+      stubBackend({ versions: [versionWithPdf] })
+      renderDetail('/documents/9?view=pdf')
+
+      const iframe = await screen.findByTestId('document-pdf-viewer')
+      expect(iframe).toHaveAttribute('src', 'blob:viewer')
+      const pdfCalls = fetchMock.mock.calls.filter(([url, init]) => {
+        const initObject = init as RequestInit | undefined
+        return (
+          String(url).endsWith('/api/generated-documents/versions/22/pdf/') &&
+          (initObject?.method ?? 'GET') === 'GET'
+        )
+      })
+      expect(pdfCalls).toHaveLength(1)
+    } finally {
+      objectUrl.restore()
+    }
+  })
+
+  it('closing the viewer revokes the object URL and removes the iframe', async () => {
+    const objectUrl = stubObjectUrl()
+    try {
+      stubBackend({ versions: [versionWithPdf] })
+      renderDetail('/documents/9?view=pdf')
+      await screen.findByTestId('document-pdf-viewer')
+
+      await user.click(screen.getByRole('button', { name: /close viewer/i }))
+
+      expect(screen.queryByTestId('document-pdf-viewer')).not.toBeInTheDocument()
+      expect(objectUrl.revokeSpy).toHaveBeenCalledWith('blob:viewer')
+    } finally {
+      objectUrl.restore()
+    }
+  })
+
+  it('shows a loading state while the PDF is being retrieved', async () => {
+    let resolvePdf: (value: Response) => void = () => {}
+    stubBackend({ versions: [versionWithPdf] })
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/api/generated-documents/versions/22/pdf/')) {
+        return new Promise<Response>((resolve) => {
+          resolvePdf = resolve
+        })
+      }
+      if (url.endsWith(`/api/generated-documents/${doc.id}/versions/`)) {
+        return Promise.resolve(jsonResponse(200, [versionWithPdf]))
+      }
+      if (init?.method === 'POST') return Promise.resolve(jsonResponse(201, versionWithPdf))
+      return Promise.resolve(jsonResponse(200, doc))
+    })
+    const objectUrl = stubObjectUrl()
+    try {
+      renderDetail()
+      await screen.findByRole('button', { name: /view pdf/i })
+
+      await user.click(screen.getByRole('button', { name: /view pdf/i }))
+
+      expect(screen.getByTestId('pdf-viewer-loading')).toHaveTextContent('Loading PDF…')
+      expect(screen.getByRole('button', { name: /loading pdf/i })).toBeDisabled()
+
+      resolvePdf(fileDownloadResponse('pdf'))
+      await screen.findByTestId('document-pdf-viewer')
+    } finally {
+      objectUrl.restore()
+    }
+  })
+
+  it('shows a safe error when the PDF file is missing on storage', async () => {
+    stubBackend({ versions: [versionWithPdf] })
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/api/generated-documents/versions/22/pdf/')) {
+        return Promise.resolve(jsonResponse(404, { detail: 'The requested file does not exist.' }))
+      }
+      if (url.endsWith(`/api/generated-documents/${doc.id}/versions/`)) {
+        return Promise.resolve(jsonResponse(200, [versionWithPdf]))
+      }
+      return Promise.resolve(jsonResponse(200, doc))
+    })
+    renderDetail()
+    await screen.findByRole('button', { name: /view pdf/i })
+
+    await user.click(screen.getByRole('button', { name: /view pdf/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/file is not available/i)
+    expect(screen.queryByTestId('document-pdf-viewer')).not.toBeInTheDocument()
+  })
+
+  it('shows a permission error when viewing is forbidden', async () => {
+    stubBackend({ versions: [versionWithPdf] })
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/api/generated-documents/versions/22/pdf/')) {
+        return Promise.resolve(
+          jsonResponse(403, { detail: 'Missing required permission: generated_documents.read' }),
+        )
+      }
+      if (url.endsWith(`/api/generated-documents/${doc.id}/versions/`)) {
+        return Promise.resolve(jsonResponse(200, [versionWithPdf]))
+      }
+      return Promise.resolve(jsonResponse(200, doc))
+    })
+    renderDetail()
+    await screen.findByRole('button', { name: /view pdf/i })
+
+    await user.click(screen.getByRole('button', { name: /view pdf/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/do not have permission/i)
+  })
+
+  it('revokes the object URL when the page unmounts', async () => {
+    const objectUrl = stubObjectUrl()
+    try {
+      stubBackend({ versions: [versionWithPdf] })
+      const view = renderDetail('/documents/9?view=pdf')
+      await screen.findByTestId('document-pdf-viewer')
+
+      view.unmount()
+
+      expect(objectUrl.revokeSpy).toHaveBeenCalledWith('blob:viewer')
+    } finally {
+      objectUrl.restore()
+    }
+  })
+
+  it('ignores a stale viewer request that finishes after the viewer is closed', async () => {
+    let resolvePdf: (value: Response) => void = () => {}
+    stubBackend({ versions: [versionWithPdf] })
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/api/generated-documents/versions/22/pdf/')) {
+        return new Promise<Response>((resolve) => {
+          resolvePdf = resolve
+        })
+      }
+      if (url.endsWith(`/api/generated-documents/${doc.id}/versions/`)) {
+        return Promise.resolve(jsonResponse(200, [versionWithPdf]))
+      }
+      return Promise.resolve(jsonResponse(200, doc))
+    })
+    const objectUrl = stubObjectUrl()
+    try {
+      renderDetail()
+      await screen.findByRole('button', { name: /view pdf/i })
+
+      await user.click(screen.getByRole('button', { name: /view pdf/i }))
+      await user.click(screen.getByRole('button', { name: /close viewer/i }))
+
+      resolvePdf(fileDownloadResponse('pdf'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(objectUrl.createSpy).not.toHaveBeenCalled()
+      expect(screen.queryByTestId('document-pdf-viewer')).not.toBeInTheDocument()
+    } finally {
+      objectUrl.restore()
+    }
   })
 })

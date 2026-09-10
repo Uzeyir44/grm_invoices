@@ -116,12 +116,24 @@ type VersionFileKind = 'docx' | 'pdf'
 
 const FILE_PATH_SEGMENT: Record<VersionFileKind, string> = { docx: 'docx', pdf: 'pdf' }
 
+async function fetchVersionFile(
+  versionId: number,
+  kind: VersionFileKind,
+  signal?: AbortSignal,
+): Promise<Response> {
+  return apiClient.raw(
+    `/generated-documents/versions/${versionId}/${FILE_PATH_SEGMENT[kind]}/`,
+    { signal },
+  )
+}
+
 async function downloadVersionFile(
   versionId: number,
   kind: VersionFileKind,
   fallbackFilename: string,
+  signal?: AbortSignal,
 ): Promise<DocumentDownload> {
-  const response = await apiClient.raw(`/generated-documents/versions/${versionId}/${FILE_PATH_SEGMENT[kind]}/`)
+  const response = await fetchVersionFile(versionId, kind, signal)
   const blob = await response.blob()
   return {
     blob,
@@ -153,6 +165,20 @@ export function downloadGeneratedDocumentPdf(
   fallbackFilename: string = DEFAULT_PDF_FILENAME,
 ): Promise<DocumentDownload> {
   return downloadVersionFile(versionId, 'pdf', fallbackFilename)
+}
+
+/**
+ * Fetch a document version's stored PDF as a Blob through the authenticated
+ * endpoint (`GET /generated-documents/versions/:versionId/pdf/`). Used by the
+ * in-app PDF viewer; the caller owns the returned Blob (e.g. turns it into a
+ * revocable `blob:` URL). Accepts an optional `AbortSignal` so a viewer can
+ * cancel a stale request. Never `/media/...`, never a token in a URL.
+ */
+export function fetchGeneratedDocumentPdf(
+  versionId: number,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  return fetchVersionFile(versionId, 'pdf', signal).then((response) => response.blob())
 }
 
 export function createGeneratedDocument(

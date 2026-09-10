@@ -4,6 +4,7 @@ import {
   downloadGeneratedDocumentDocx,
   downloadGeneratedDocumentPdf,
   fetchGeneratedDocuments,
+  fetchGeneratedDocumentPdf,
   generateDocumentDocx,
   generateDocumentFromInput,
   generateGeneratedDocumentPdf,
@@ -231,6 +232,44 @@ describe('documents API', () => {
         items: [],
       }),
     ).rejects.toMatchObject({ status: 503 })
+  })
+
+  it('fetches a stored PDF blob through the authenticated endpoint', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(new Blob(['%PDF-stored'], { type: 'application/pdf' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/pdf' },
+      }),
+    )
+    setAccessToken('token-1')
+
+    const result = await fetchGeneratedDocumentPdf(21)
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/generated-documents/versions/21/pdf/')
+    expect(init.method).toBe('GET')
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer token-1')
+    expect(result).toBeInstanceOf(Blob)
+  })
+
+  it('forwards an abort signal on the PDF fetch', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(new Blob(['%PDF'], { type: 'application/pdf' }), { status: 200 }),
+    )
+    const controller = new AbortController()
+
+    await fetchGeneratedDocumentPdf(21, controller.signal)
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect((init as RequestInit).signal).toBe(controller.signal)
+  })
+
+  it('converts a 404 PDF fetch into a typed ApiError', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(404, { detail: 'The requested file does not exist.' }))
+
+    await expect(fetchGeneratedDocumentPdf(999)).rejects.toMatchObject({
+      status: HTTP_STATUS.NOT_FOUND,
+    })
   })
 
   it('propagates an atomic generation failure as a typed ApiError', async () => {

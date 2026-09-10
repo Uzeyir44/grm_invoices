@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import {
   downloadGeneratedDocumentDocx,
   downloadGeneratedDocumentPdf,
+  fetchGeneratedDocumentPdf,
   generateDocumentDocx,
   generateGeneratedDocumentPdf,
   getGeneratedDocument,
@@ -14,6 +15,9 @@ import { DocumentStatusBadge } from '../../components/ui/DocumentStatusBadge'
 import { PageContainer } from '../../components/ui/PageContainer'
 import { ApiError, HTTP_STATUS } from '../../types/api'
 import type { GeneratedDocument, GeneratedDocumentVersion } from '../../types/generatedDocument'
+import { triggerBrowserDownload } from '../../utils/download'
+import { fileActionError } from '../../utils/fileActionError'
+import { selectLatestDownloadableVersion } from './generatedDocumentVersions'
 
 type State =
   | { status: 'loading' }
@@ -26,34 +30,6 @@ function formatDate(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
   return date.toISOString().slice(0, 10)
-}
-
-function fileActionError(error: unknown, fallback: string): string {
-  if (!(error instanceof ApiError)) return fallback
-  if (error.status === HTTP_STATUS.FORBIDDEN) {
-    return 'You do not have permission to generate or download this document.'
-  }
-  if (error.status === HTTP_STATUS.NOT_FOUND) {
-    return 'The document or its generated file is not available.'
-  }
-  if (error.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
-    return error.retryAfterSeconds !== null
-      ? `Too many attempts. Please wait ${error.retryAfterSeconds} seconds and try again.`
-      : 'Too many attempts. Please wait a moment and try again.'
-  }
-  return error.message || fallback
-}
-
-/** Trigger the browser's download for a binary `Blob` and clean up its URL. */
-function triggerBrowserDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  document.body.appendChild(anchor)
-  anchor.click()
-  document.body.removeChild(anchor)
-  URL.revokeObjectURL(url)
 }
 
 /**
@@ -74,6 +50,7 @@ function triggerBrowserDownload(blob: Blob, filename: string) {
 export function DocumentDetailPage() {
   const { documentId } = useParams()
   const id = Number(documentId)
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [state, setState] = useState<State>({ status: 'loading' })
 
@@ -92,6 +69,15 @@ export function DocumentDetailPage() {
   const [downloadError, setDownloadError] = useState<string>()
 
   const [fileNotice, setFileNotice] = useState<string>()
+
+  const [viewerState, setViewerState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [viewerUrl, setViewerUrl] = useState<string>()
+  const [viewerError, setViewerError] = useState<string>()
+  const [viewerVersion, setViewerVersion] = useState<GeneratedDocumentVersion | null>(null)
+  const viewerUrlRef = useRef<string | undefined>(undefined)
+  const viewerAbortRef = useRef<AbortController | null>(null)
+  const viewerSeqRef = useRef(0)
+  const autoOpenedForRef = useRef<string | null>(null)
 
   const load = useCallback(() => {
     void getGeneratedDocument(id)
@@ -138,8 +124,100 @@ export function DocumentDetailPage() {
 
   const docxVersion = useMemo(() => {
     if (versions === null) return null
-    return [...versions].reverse().find((version) => version.storage.docx) ?? null
+    return selectLatestDownloadableVersion(versions)
   }, [versions])
+
+  const openViewer = useCallback((version: GeneratedDocumentVersion) => {
+    if (!version.storage.pdf) return
+    if (viewerState === 'loading') return
+
+    viewerAbortRef.current?.abort()
+    viewerAbortRef.current = null
+    if (viewerUrlRef.current) {
+      URL.revokeObjectURL(viewerUrlRef.current)
+      viewerUrlRef.current = undefined
+    }
+
+    const seq = viewerSeqRef.current + 1
+    viewerSeqRef.current = seq
+    const controller = new AbortController()
+    viewerAbortRef.current = controller
+
+    setViewerVersion(version)
+    setViewerUrl(undefined)
+    setViewerError(undefined)
+    setViewerState('loading')
+
+    void fetchGeneratedDocumentPdf(version.id, controller.signal)
+      .then((blob) => {
+        if (viewerSeqRef.current !== seq) return
+        if (typeof URL.createObjectURL !== 'function') {
+          setViewerError('PDF viewing is not supported in this browser.')
+          setViewerState('error')
+          return
+        }
+        const url = URL.createObjectURL(blob)
+        viewerUrlRef.current = url
+        setViewerUrl(url)
+        setViewerState('ready')
+      })
+      .catch((error: unknown) => {
+        if (viewerSeqRef.current !== seq) return
+        if (controller.signal.aborted) return
+        setViewerError(fileActionError(error, 'Could not load the PDF.'))
+        setViewerState('error')
+      })
+  }, [viewerState])
+
+  function closeViewer() {
+    viewerAbortRef.current?.abort()
+    viewerAbortRef.current = null
+    if (viewerUrlRef.current) {
+      URL.revokeObjectURL(viewerUrlRef.current)
+      viewerUrlRef.current = undefined
+    }
+    viewerSeqRef.current += 1
+    setViewerVersion(null)
+    setViewerUrl(undefined)
+    setViewerError(undefined)
+    setViewerState('idle')
+    if (searchParams.get('view') === 'pdf') {
+      setSearchParams({})
+    }
+  }
+
+  // Release the viewer's object URL and cancel any in-flight PDF request when
+  // the page unmounts (also when navigating to another document).
+  useEffect(() => {
+    return () => {
+      viewerAbortRef.current?.abort()
+      viewerAbortRef.current = null
+      if (viewerUrlRef.current) {
+        URL.revokeObjectURL(viewerUrlRef.current)
+        viewerUrlRef.current = undefined
+      }
+    }
+  }, [])
+
+  // `?view=pdf` (from the Documents list "View" action) opens the viewer once
+  // the version list has loaded and the selected version has a PDF. The
+  // handled-search marker prevents a close/clear race from re-opening the
+  // viewer on an intermediate render, while still allowing a fresh `?view=pdf`
+  // navigation (the marker is reset whenever the parameter is absent).
+  useEffect(() => {
+    if (searchParams.get('view') !== 'pdf') {
+      autoOpenedForRef.current = null
+      return
+    }
+    if (autoOpenedForRef.current === searchParams.toString()) return
+    if (docxVersion === null) return
+    if (!docxVersion.storage.pdf) return
+    if (viewerState !== 'idle') return
+    autoOpenedForRef.current = searchParams.toString()
+    // Intentional: a `?view=pdf` navigation should open the viewer on arrival.
+    // oxlint-disable-next-line react/set-state-in-effect
+    openViewer(docxVersion)
+  }, [searchParams, docxVersion, viewerState, openViewer])
 
   function handleGenerateDocx() {
     if (docxGenerating) return
@@ -381,6 +459,15 @@ export function DocumentDetailPage() {
                     </p>
                     <Button
                       variant="secondary"
+                      loading={viewerState === 'loading'}
+                      loadingLabel="Loading PDF…"
+                      disabled={viewerState === 'loading'}
+                      onClick={() => openViewer(docxVersion)}
+                    >
+                      View PDF
+                    </Button>
+                    <Button
+                      variant="secondary"
                       loading={pdfDownloading}
                       loadingLabel="Downloading PDF…"
                       disabled={pdfDownloading}
@@ -438,6 +525,51 @@ export function DocumentDetailPage() {
             </p>
           ) : null}
         </section>
+
+        {viewerState !== 'idle' ? (
+          <section aria-label="PDF viewer" className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-slate-700">PDF viewer</h2>
+              <button
+                type="button"
+                onClick={closeViewer}
+                className="text-sm text-slate-600 underline hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-slate-500"
+              >
+                Close viewer
+              </button>
+            </div>
+            {viewerState === 'loading' ? (
+              <div
+                data-testid="pdf-viewer-loading"
+                className="flex h-[600px] items-center justify-center rounded-lg border border-slate-200 bg-white text-sm text-slate-500"
+              >
+                Loading PDF…
+              </div>
+            ) : null}
+            {viewerState === 'error' ? (
+              <div
+                role="alert"
+                className="space-y-2 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700"
+              >
+                <p>{viewerError}</p>
+                <Button
+                  variant="secondary"
+                  onClick={() => viewerVersion && openViewer(viewerVersion)}
+                >
+                  Retry
+                </Button>
+              </div>
+            ) : null}
+            {viewerState === 'ready' && viewerUrl ? (
+              <iframe
+                src={viewerUrl}
+                title="Generated document PDF"
+                data-testid="document-pdf-viewer"
+                className="h-[700px] w-full rounded-lg border border-slate-200 bg-white"
+              />
+            ) : null}
+          </section>
+        ) : null}
       </div>
     </PageContainer>
   )

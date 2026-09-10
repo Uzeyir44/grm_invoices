@@ -1,9 +1,25 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DocumentsIndexPage } from './DocumentsIndexPage'
 import { generatedDocuments, jsonResponse } from '../../test/documentFixtures'
+import type { GeneratedDocumentVersion } from '../../types/generatedDocument'
+
+const versionWithPdf: GeneratedDocumentVersion = {
+  id: 21,
+  generated_document_id: 9,
+  company_id: 10,
+  version_number: 1,
+  template_version_id: 3,
+  currency_id: 1,
+  exchange_rate_used: null,
+  vat_rate_used_percent: null,
+  generation_metadata: { engine_version: '4.4' },
+  storage: { docx: true, pdf: true },
+  generated_by_id: 1,
+  created_at: '2026-09-04T10:00:00+00:00',
+}
 
 function renderDocuments() {
   return render(
@@ -15,6 +31,35 @@ function renderDocuments() {
       </Routes>
     </MemoryRouter>,
   )
+}
+
+function binaryResponse(kind: 'docx' | 'pdf'): Response {
+  return new Response(new Blob([kind === 'pdf' ? '%PDF' : 'docx-bytes']), {
+    status: 200,
+    headers: {
+      'Content-Type':
+        kind === 'pdf'
+          ? 'application/pdf'
+          : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    },
+  })
+}
+
+function stubObjectUrl() {
+  const createSpy = vi.fn(() => 'blob:download')
+  const revokeSpy = vi.fn()
+  const originalCreate = URL.createObjectURL
+  const originalRevoke = URL.revokeObjectURL
+  URL.createObjectURL = createSpy
+  URL.revokeObjectURL = revokeSpy
+  return {
+    createSpy,
+    revokeSpy,
+    restore() {
+      URL.createObjectURL = originalCreate
+      URL.revokeObjectURL = originalRevoke
+    },
+  }
 }
 
 describe('DocumentsIndexPage', () => {
@@ -31,6 +76,28 @@ describe('DocumentsIndexPage', () => {
     vi.unstubAllGlobals()
   })
 
+  function stubBackend() {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/generated-documents/')) {
+        return Promise.resolve(jsonResponse(200, generatedDocuments))
+      }
+      if (url.endsWith('/generated-documents/9/versions/')) {
+        return Promise.resolve(jsonResponse(200, [versionWithPdf]))
+      }
+      if (url.endsWith('/generated-documents/10/versions/')) {
+        return Promise.resolve(jsonResponse(200, []))
+      }
+      if (url.endsWith('/versions/21/docx/')) {
+        return Promise.resolve(binaryResponse('docx'))
+      }
+      if (url.endsWith('/versions/21/pdf/')) {
+        return Promise.resolve(binaryResponse('pdf'))
+      }
+      return Promise.resolve(jsonResponse(404, {}))
+    })
+  }
+
   it('shows a loading state while the list request is pending', () => {
     fetchMock.mockReturnValue(new Promise<Response>(() => {}))
     renderDocuments()
@@ -38,7 +105,7 @@ describe('DocumentsIndexPage', () => {
   })
 
   it('renders the real generated documents with counts, types, clients, and statuses', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(200, generatedDocuments))
+    stubBackend()
     renderDocuments()
 
     await screen.findByTestId('documents-count')
@@ -56,7 +123,7 @@ describe('DocumentsIndexPage', () => {
   })
 
   it('links each document number to its detail route', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(200, generatedDocuments))
+    stubBackend()
     renderDocuments()
 
     await screen.findByRole('link', { name: 'INV-001' })
@@ -71,7 +138,7 @@ describe('DocumentsIndexPage', () => {
   })
 
   it('navigates to a document detail page from a row', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(200, generatedDocuments))
+    stubBackend()
     renderDocuments()
     await screen.findByRole('link', { name: 'INV-001' })
 
@@ -93,7 +160,7 @@ describe('DocumentsIndexPage', () => {
   })
 
   it('navigates to the create page from the New document action', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(200, generatedDocuments))
+    stubBackend()
     renderDocuments()
     await screen.findByRole('link', { name: 'INV-001' })
 
@@ -105,20 +172,153 @@ describe('DocumentsIndexPage', () => {
   })
 
   it('shows an error state and retries the request', async () => {
-    fetchMock.mockRejectedValueOnce(new Error('boom'))
+    let fail = true
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/generated-documents/') && fail) {
+        fail = false
+        return Promise.reject(new Error('boom'))
+      }
+      if (url.endsWith('/generated-documents/')) {
+        return Promise.resolve(jsonResponse(200, generatedDocuments))
+      }
+      if (url.endsWith('/generated-documents/9/versions/')) {
+        return Promise.resolve(jsonResponse(200, [versionWithPdf]))
+      }
+      if (url.endsWith('/generated-documents/10/versions/')) {
+        return Promise.resolve(jsonResponse(200, []))
+      }
+      return Promise.resolve(jsonResponse(404, {}))
+    })
     renderDocuments()
 
     expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load documents.")
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
 
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, generatedDocuments))
     await user.click(screen.getByRole('button', { name: /retry/i }))
 
     expect(await screen.findByRole('cell', { name: 'INV-001' })).toBeInTheDocument()
   })
 
+  it('shows file actions for generated documents and none for draft-only documents', async () => {
+    stubBackend()
+    renderDocuments()
+
+    // INV-001 (generated, PDF available) exposes View / Download DOCX / Download PDF.
+    const view = await screen.findByRole('link', { name: /view/i })
+    expect(view).toHaveAttribute('href', '/documents/9?view=pdf')
+    expect(screen.getByRole('button', { name: /download docx/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /download pdf/i })).toBeInTheDocument()
+
+    // CC-001 is still a draft with no generated files.
+    expect(screen.getByText('No generated files')).toBeInTheDocument()
+  })
+
+  it('shows a loading state for file actions while versions load', async () => {
+    let resolveVersions: (value: Response) => void = () => {}
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/generated-documents/')) {
+        return Promise.resolve(jsonResponse(200, [generatedDocuments[0]]))
+      }
+      if (url.endsWith('/generated-documents/9/versions/')) {
+        return new Promise<Response>((resolve) => {
+          resolveVersions = resolve
+        })
+      }
+      return Promise.resolve(jsonResponse(404, {}))
+    })
+    renderDocuments()
+
+    await screen.findByRole('cell', { name: 'INV-001' })
+    expect(screen.getByText('Loading files…')).toBeInTheDocument()
+
+    resolveVersions(jsonResponse(200, [versionWithPdf]))
+    expect(await screen.findByRole('link', { name: /view/i })).toBeInTheDocument()
+  })
+
+  it('shows a per-row error and retry when versions fail to load', async () => {
+    let failVersions = true
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/generated-documents/')) {
+        return Promise.resolve(jsonResponse(200, [generatedDocuments[0]]))
+      }
+      if (url.endsWith('/generated-documents/9/versions/')) {
+        if (failVersions) {
+          failVersions = false
+          return Promise.reject(new Error('boom'))
+        }
+        return Promise.resolve(jsonResponse(200, [versionWithPdf]))
+      }
+      return Promise.resolve(jsonResponse(404, {}))
+    })
+    renderDocuments()
+
+    expect(await screen.findByText('Files unavailable.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /retry/i }))
+    expect(await screen.findByRole('link', { name: /view/i })).toBeInTheDocument()
+  })
+
+  it('downloads the DOCX from the list without regenerating the document', async () => {
+    const objectUrl = stubObjectUrl()
+    try {
+      stubBackend()
+      renderDocuments()
+      await screen.findByRole('link', { name: /view/i })
+
+      await user.click(screen.getByRole('button', { name: /download docx/i }))
+
+      await waitFor(() => {
+        const call = fetchMock.mock.calls.find(([url, init]) => {
+          const initObject = init as RequestInit | undefined
+          return (
+            String(url).endsWith('/api/generated-documents/versions/21/docx/') &&
+            (initObject?.method ?? 'GET') === 'GET'
+          )
+        })
+        expect(call).toBeDefined()
+      })
+      const postCalls = fetchMock.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === 'POST',
+      )
+      expect(postCalls).toHaveLength(0)
+    } finally {
+      objectUrl.restore()
+    }
+  })
+
+  it('downloads the PDF from the list without regenerating the document', async () => {
+    const objectUrl = stubObjectUrl()
+    try {
+      stubBackend()
+      renderDocuments()
+      await screen.findByRole('link', { name: /view/i })
+
+      await user.click(screen.getByRole('button', { name: /download pdf/i }))
+
+      await waitFor(() => {
+        const call = fetchMock.mock.calls.find(([url, init]) => {
+          const initObject = init as RequestInit | undefined
+          return (
+            String(url).endsWith('/api/generated-documents/versions/21/pdf/') &&
+            (initObject?.method ?? 'GET') === 'GET'
+          )
+        })
+        expect(call).toBeDefined()
+      })
+      const postCalls = fetchMock.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === 'POST',
+      )
+      expect(postCalls).toHaveLength(0)
+    } finally {
+      objectUrl.restore()
+    }
+  })
+
   it('does not invent search or pagination controls the backend does not support', async () => {
-    fetchMock.mockResolvedValue(jsonResponse(200, generatedDocuments))
+    stubBackend()
     renderDocuments()
     await screen.findByTestId('documents-count')
 

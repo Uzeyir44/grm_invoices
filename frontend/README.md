@@ -337,6 +337,34 @@ sends `company_id`).
   message); 401 is handled by the existing refresh flow.
 - Each row's document number links to `/documents/:documentId`, and a
   "New document" action (also in the empty state) links to `/documents/new`.
+- Each row also loads its versions (`GET /api/generated-documents/:id/versions/`,
+  the existing endpoint) and shows **file actions** for already-generated
+  documents: **View** (links to `/documents/:documentId?view=pdf`), **Download
+  DOCX**, and **Download PDF** — driven by the version's real
+  `storage.docx`/`storage.pdf` booleans. Rows without generated files show
+  "No generated files"; a failed version lookup shows a safe per-row error with
+  a Retry action. Downloads reuse the authenticated version endpoints and never
+  regenerate the document.
+
+### Viewing and downloading generated files
+
+Once a document is generated, its files stay accessible without regenerating:
+
+- **View** — the Documents list's **View** link (or the detail page's **View
+  PDF** button) opens the detail page's in-app PDF viewer: the stored PDF is
+  fetched through `GET /api/generated-documents/versions/:versionId/pdf/` (the
+  authenticated, tenant-scoped endpoint), turned into a temporary `blob:` URL,
+  and rendered in a native `<iframe>`. The viewer has loading, error/retry
+  (404 → "file is no longer available", 403 → permission, 429/5xx → safe
+  messages) and a **Close viewer** action; the object URL is revoked on close,
+  on a newer request, and on unmount. Opening via `?view=pdf` auto-opens the
+  viewer once the version list is loaded. Never `/media/...`, never a token in
+  a URL, never a storage path.
+- **Download DOCX / Download PDF** — available on both the list and the detail
+  page. They reuse the existing authenticated `.../versions/:versionId/docx/`
+  and `.../versions/:versionId/pdf/` endpoints and stream the stored bytes as a
+  download with the backend's `Content-Disposition` filename. They never call a
+  generation endpoint, never create a document/version, and never change state.
 
 ### Document detail (`/documents/:documentId`)
 
@@ -379,10 +407,14 @@ and exposes a "Generated file" section using the actual version state
 - **PDF generation** converts an already-generated DOCX *version* to PDF:
   `POST .../versions/:versionId/generate-pdf/` runs synchronously (no body, no
   polling) and returns the same version with `storage.pdf` true. It appears as
-  "Generate PDF"/"Download PDF" driven by the version's real `storage.pdf`
-  state, with its own loading state that does not block the DOCX actions. A 503
-  (LibreOffice runtime unavailable) or 400 (conversion failure) is surfaced as a
-  safe message.
+  "Generate PDF"/"View PDF"/"Download PDF" driven by the version's real
+  `storage.pdf` state, with its own loading state that does not block the DOCX
+  actions. A 503 (LibreOffice runtime unavailable) or 400 (conversion failure)
+  is surfaced as a safe message.
+- **View PDF** (when a PDF exists) opens the in-app viewer described above —
+  it fetches the stored PDF through the authenticated endpoint, renders it in a
+  native `<iframe>` from a temporary `blob:` URL, and supports loading /
+  close / retry with the object URL revoked when no longer needed.
 - **Downloads** use the version-based authenticated endpoints via the shared API
   client's `raw` (bearer-token) capability — never `/media/...`, never a token
   in a URL, never a storage path. The `Blob` is saved with the filename from the
@@ -625,14 +657,21 @@ detail version list alongside the untouched activation action), and the generate
  created detail page, generation failure without navigation, list → create /
  create → detail / list → detail / detail → list navigation,
  duplicate-submit prevention, backend field / nested line-item / non-field
- errors, cancellation), preview (no preview request before clicking Preview,
+errors, cancellation), preview (no preview request before clicking Preview,
  exactly one authenticated preview POST with the current form state, `blob:`
  iframe rendering, preview failure without navigation or Generate request,
  stale-preview invalidation + object-URL revocation on input changes,
- duplicate-preview prevention while in flight), the detail page
-(loading, metadata
-rendering incl. status badge and client/template links, non-numeric id, 404 /
-403 / generic error / retry, back navigation), DOCX generation + download
+ duplicate-preview prevention while in flight), the documents list file actions
+ (per-row version loading, View link to `?view=pdf`, Download DOCX/PDF via the
+ authenticated version endpoints with no POST/generation, per-row loading and
+ error/retry, "No generated files" for drafts), the detail page
+ (loading, metadata
+ rendering incl. status badge and client/template links, non-numeric id, 404 /
+ 403 / generic error / retry, back navigation), the PDF viewer (View PDF button
+ and auto-open from `?view=pdf`, authenticated PDF fetch to a `blob:` iframe,
+ loading state, close + object-URL revocation, unmount revocation, 404/403/5xx
+ error states, stale-request guard after closing, no generation requests),
+ DOCX generation + download
 (API: generate method/body/response, version list, DOCX download blob +
 Content-Disposition filename + fallback + 404; page: Generate/Download button
 appearance from `storage.docx`, generation loading + duplicate prevention +
