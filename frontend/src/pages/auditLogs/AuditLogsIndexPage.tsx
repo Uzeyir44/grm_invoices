@@ -44,6 +44,28 @@ function formatUserId(userId: number | null): string {
   return userId === null ? '—' : `User #${userId}`
 }
 
+/**
+ * Human-readable user cell: the backend-supplied `user_name` is primary and
+ * the stable `User #<id>` stays visible as secondary technical information.
+ * A null name (deleted user / system event) falls back to the ID form.
+ */
+function formatUser(userId: number | null, userName: string | null): string {
+  if (userName) {
+    return userId === null ? userName : `${userName} (User #${userId})`
+  }
+  return formatUserId(userId)
+}
+
+/**
+ * Human-readable entity cell: the backend-supplied `entity_name` is primary
+ * and the stable `<type> #<id>` stays visible as secondary technical
+ * information. A null name (unknown type / removed entity) falls back to the
+ * ID form.
+ */
+function formatEntity(entityType: string, entityId: number, entityName: string | null): string {
+  return entityName ? `${entityName} (${entityType} #${entityId})` : `${entityType} #${entityId}`
+}
+
 function errorMessage(error: ApiError): string {
   if (error.status === HTTP_STATUS.FORBIDDEN) {
     return 'You do not have permission to view audit logs.'
@@ -411,10 +433,10 @@ export function AuditLogsIndexPage() {
                       </td>
                       <td className="px-4 py-3 font-medium text-slate-900">{log.action}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-600">
-                        {log.entity_type} #{log.entity_id}
+                        {formatEntity(log.entity_type, log.entity_id, log.entity_name)}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-600">
-                        {formatUserId(log.user_id)}
+                        {formatUser(log.user_id, log.user_name)}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-slate-600">
                         {log.ip_address ?? '—'}

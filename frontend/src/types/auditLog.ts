@@ -9,9 +9,12 @@
  *   supported, max page size 100. An out-of-range `?page=` is a 404.
  * * Row fields (`AuditLogSerializer`, strictly read-only): `id`,
  *   `company_id`, `user_id` (nullable — the user may have been deleted),
- *   `action`, `entity_type`, `entity_id`, `previous_values`, `new_values`,
+ *   `user_name` (nullable display name of the acting user), `action`,
+ *   `entity_type`, `entity_id`, `entity_name` (nullable tenant-scoped label
+ *   of the referenced entity), `previous_values`, `new_values`,
  *   `ip_address`, `user_agent`, `request_id`, `created_at`. Only compact
- *   identifiers are exposed — never full `User` / `Company` objects.
+ *   identifiers plus these two display strings are exposed — never full
+ *   `User` / `Company` objects.
  *
  * The company is always the authenticated user's company; no `company_id` is
  * ever sent from the client.
@@ -22,9 +25,13 @@ export interface AuditLog {
   id: number
   company_id: number
   user_id: number | null
+  /** Full name of the acting user, or null (deleted user / system event). */
+  user_name: string | null
   action: string
   entity_type: string
   entity_id: number
+  /** Human-readable label of the referenced entity, or null when unknown. */
+  entity_name: string | null
   previous_values: Record<string, unknown> | null
   new_values: Record<string, unknown> | null
   ip_address: string | null

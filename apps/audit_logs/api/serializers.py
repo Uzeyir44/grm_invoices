@@ -3,14 +3,19 @@ Read-only serializers for the Audit Logs read API (Steps 5.3/5.4).
 
 Only compact identifiers (``company_id`` / ``user_id``) are exposed — never
 full ``User`` / ``Company`` objects, so no password hashes, MFA secrets,
-tokens, or unrelated profile data can leak. The record serializer is strictly
-read-only; the query serializer validates the explicitly whitelisted filter
-parameters.
+tokens, or unrelated profile data can leak. Two human-readable display
+strings ride alongside the identifiers: ``user_name`` (the acting user's
+full name) and ``entity_name`` (the referenced entity's label, resolved
+tenant-scoped by the view). Both are ``None`` when the name is unavailable
+(deleted user, unknown entity type) — the IDs remain the stable reference.
+The record serializer is strictly read-only; the query serializer validates
+the explicitly whitelisted filter parameters.
 """
 
 from rest_framework import serializers
 
 from apps.audit_logs.models import AuditLog
+from apps.audit_logs.services import format_user_name
 
 
 class AuditLogSerializer(serializers.ModelSerializer):
@@ -18,6 +23,8 @@ class AuditLogSerializer(serializers.ModelSerializer):
 
     company_id = serializers.IntegerField(read_only=True)
     user_id = serializers.IntegerField(read_only=True, allow_null=True)
+    user_name = serializers.SerializerMethodField()
+    entity_name = serializers.SerializerMethodField()
 
     class Meta:
         model = AuditLog
@@ -25,9 +32,11 @@ class AuditLogSerializer(serializers.ModelSerializer):
             "id",
             "company_id",
             "user_id",
+            "user_name",
             "action",
             "entity_type",
             "entity_id",
+            "entity_name",
             "previous_values",
             "new_values",
             "ip_address",
@@ -36,6 +45,16 @@ class AuditLogSerializer(serializers.ModelSerializer):
             "created_at",
         ]
         read_only_fields = fields
+
+    def get_user_name(self, obj):
+        user = obj.user
+        if user is None:
+            return None
+        return format_user_name(user.first_name, user.last_name)
+
+    def get_entity_name(self, obj):
+        labels = self.context.get("entity_labels", {})
+        return labels.get((obj.entity_type, obj.entity_id))
 
 
 class AuditLogQuerySerializer(serializers.Serializer):

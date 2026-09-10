@@ -37,6 +37,10 @@ import json
 import uuid
 
 from apps.audit_logs.models import AuditLog
+from apps.authentication.models import User
+from apps.clients.models import Client
+from apps.document_templates.models import DocumentTemplate, TemplateVersion
+from apps.generated_documents.models import GeneratedDocument, GeneratedDocumentVersion
 
 REDACTED_MARKER = "[REDACTED]"
 
@@ -235,3 +239,147 @@ def create_audit_log(
         user_agent=user_agent,
         request_id=_coerce_request_id(request_id),
     )
+
+
+def format_user_name(first_name, last_name):
+    """
+    Combine ``first_name``/``last_name`` into a human-readable display name.
+
+    Returns ``None`` when both parts are blank, so callers can fall back to
+    a technical identifier instead of rendering an empty string.
+    """
+    parts = []
+    for part in (first_name, last_name):
+        if part:
+            text = str(part).strip()
+            if text:
+                parts.append(text)
+    return " ".join(parts) or None
+
+
+def _client_label(client):
+    """
+    Human-readable label for a ``Client``: the legal name, or the
+    individual's full name. ``None`` when the subtype row is missing.
+    """
+    if client.client_type == Client.ClientType.LEGAL_ENTITY:
+        legal = getattr(client, "legal_entity", None)
+        return legal.legal_name if legal is not None else None
+    individual = getattr(client, "individual", None)
+    if individual is None:
+        return None
+    return (
+        " ".join(
+            part
+            for part in (
+                individual.first_name,
+                individual.middle_name,
+                individual.last_name,
+            )
+            if part
+        )
+        or None
+    )
+
+
+def resolve_entity_labels(company_id, logs):
+    """
+    Batch-resolve human-readable labels for audit rows' entities.
+
+    Args:
+        company_id: the tenant that owns both the audit rows and the
+            referenced entities. Every entity lookup is scoped by this id,
+            so a label can never leak across tenants.
+        logs: the audit rows (or any objects with ``entity_type`` /
+            ``entity_id``) to resolve.
+
+    Returns:
+        A dict keyed by ``(entity_type, entity_id)`` whose values are the
+        display label or ``None`` when the entity type is unknown or the
+        entity no longer exists (e.g. a physically deleted user).
+
+    Soft-deleted rows (clients, templates, documents) still resolve: the
+    lookups deliberately do not exclude ``deleted_at`` rows, because audit
+    history must stay readable after a soft-delete. At most one query per
+    supported ``entity_type`` is issued, regardless of row count, so a
+    paginated list never becomes N+1.
+    """
+    wanted = {}
+    for log in logs:
+        wanted.setdefault(log.entity_type, set()).add(log.entity_id)
+    labels = {}
+
+    user_ids = wanted.get("user", set())
+    if user_ids:
+        users = User.objects.filter(company_id=company_id, id__in=user_ids).only(
+            "id", "first_name", "last_name"
+        )
+        for user in users:
+            labels[("user", user.id)] = format_user_name(
+                user.first_name, user.last_name
+            )
+
+    client_ids = wanted.get("client", set())
+    if client_ids:
+        clients = (
+            Client.objects.filter(company_id=company_id, id__in=client_ids)
+            .select_related("legal_entity", "individual")
+        )
+        for client in clients:
+            labels[("client", client.id)] = _client_label(client)
+
+    template_ids = wanted.get("document_template", set())
+    if template_ids:
+        templates = DocumentTemplate.objects.filter(
+            company_id=company_id, id__in=template_ids
+        ).only("id", "name")
+        for template in templates:
+            labels[("document_template", template.id)] = template.name or None
+
+    template_version_ids = wanted.get("document_template_version", set())
+    if template_version_ids:
+        versions = TemplateVersion.objects.filter(
+            company_id=company_id, id__in=template_version_ids
+        ).select_related("template")
+        for version in versions:
+            template = getattr(version, "template", None)
+            template_name = template.name if template is not None else None
+            if template_name:
+                labels[("document_template_version", version.id)] = (
+                    f"{template_name} v{version.version_number}"
+                )
+            else:
+                labels[("document_template_version", version.id)] = (
+                    f"v{version.version_number}"
+                )
+
+    document_ids = wanted.get("generated_document", set())
+    if document_ids:
+        documents = GeneratedDocument.objects.filter(
+            company_id=company_id, id__in=document_ids
+        ).only("id", "document_number")
+        for document in documents:
+            labels[("generated_document", document.id)] = (
+                document.document_number or None
+            )
+
+    document_version_ids = wanted.get("generated_document_version", set())
+    if document_version_ids:
+        versions = GeneratedDocumentVersion.objects.filter(
+            company_id=company_id, id__in=document_version_ids
+        ).select_related("generated_document")
+        for version in versions:
+            document = getattr(version, "generated_document", None)
+            document_number = (
+                document.document_number if document is not None else None
+            )
+            if document_number:
+                labels[("generated_document_version", version.id)] = (
+                    f"{document_number} v{version.version_number}"
+                )
+            else:
+                labels[("generated_document_version", version.id)] = (
+                    f"v{version.version_number}"
+                )
+
+    return labels

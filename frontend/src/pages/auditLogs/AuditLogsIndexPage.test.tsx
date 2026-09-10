@@ -55,9 +55,9 @@ describe('AuditLogsIndexPage', () => {
     expect(screen.getByTestId('audit-logs-count')).toHaveTextContent('2 audit logs')
     expect(screen.getByRole('cell', { name: 'client.created' })).toBeInTheDocument()
     expect(screen.getByRole('cell', { name: 'user.role_changed' })).toBeInTheDocument()
-    expect(screen.getByRole('cell', { name: 'client #3' })).toBeInTheDocument()
+    expect(screen.getByRole('cell', { name: 'Acme Corp (client #3)' })).toBeInTheDocument()
     expect(screen.getByRole('cell', { name: 'user #2' })).toBeInTheDocument()
-    expect(screen.getByRole('cell', { name: 'User #1' })).toBeInTheDocument()
+    expect(screen.getByRole('cell', { name: 'Alice Adams (User #1)' })).toBeInTheDocument()
     expect(screen.getByRole('cell', { name: '10.0.0.1' })).toBeInTheDocument()
     expect(
       screen.getByRole('cell', { name: '11111111-1111-4111-8111-111111111111' }),

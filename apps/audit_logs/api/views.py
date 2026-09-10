@@ -19,6 +19,7 @@ from apps.audit_logs.api.serializers import (
     AuditLogSerializer,
 )
 from apps.audit_logs.models import AuditLog
+from apps.audit_logs.services import resolve_entity_labels
 from apps.authentication.api.permissions import IsCompanyMember, permission_required
 
 
@@ -46,7 +47,11 @@ class AuditLogListView(APIView):
         validated = query_serializer.validated_data
 
         # Tenant scope first — user-controlled filters never widen it.
-        queryset = AuditLog.objects.filter(company_id=request.user.company_id)
+        # select_related("user") feeds the user_name display field without
+        # an extra query per row.
+        queryset = AuditLog.objects.filter(
+            company_id=request.user.company_id
+        ).select_related("user")
 
         filters = {}
         if validated.get("action"):
@@ -71,7 +76,23 @@ class AuditLogListView(APIView):
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, request, view=self)
         if page is not None:
-            serializer = AuditLogSerializer(page, many=True)
+            logs = list(page)
+            serializer = AuditLogSerializer(
+                logs,
+                many=True,
+                context={
+                    "entity_labels": resolve_entity_labels(
+                        request.user.company_id, logs
+                    )
+                },
+            )
             return paginator.get_paginated_response(serializer.data)
-        serializer = AuditLogSerializer(queryset, many=True)
+        logs = list(queryset)
+        serializer = AuditLogSerializer(
+            logs,
+            many=True,
+            context={
+                "entity_labels": resolve_entity_labels(request.user.company_id, logs)
+            },
+        )
         return Response(serializer.data)

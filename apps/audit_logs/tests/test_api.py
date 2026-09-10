@@ -16,6 +16,10 @@ from apps.audit_logs.models import AuditLog
 from apps.audit_logs.services import create_audit_log
 from apps.authentication.models import Permission, Role, UserRole
 from apps.authentication.tests.test_authentication import make_company, make_user
+from apps.clients.models import Client, ClientIndividual, ClientLegalEntity
+from apps.document_templates.models import DocumentTemplate, TemplateVersion
+from apps.generated_documents.models import GeneratedDocument, GeneratedDocumentVersion
+from apps.reference_data.models import Currency, DocumentType
 
 READ = ("audit_logs.read",)
 
@@ -164,9 +168,12 @@ class ListingTests(AuditLogAPITestCase):
         self.assertEqual(row["id"], event.id)
         self.assertEqual(row["company_id"], self.company_a.id)
         self.assertEqual(row["user_id"], self.alice.id)
+        self.assertEqual(row["user_name"], "Test User")
         self.assertEqual(row["action"], "update")
         self.assertEqual(row["entity_type"], "client")
         self.assertEqual(row["entity_id"], 7)
+        # No client with id 7 exists, so there is no label — only the IDs.
+        self.assertIsNone(row["entity_name"])
         self.assertEqual(row["previous_values"], {"name": "Old"})
         self.assertEqual(row["new_values"], {"name": "New"})
         self.assertEqual(row["ip_address"], "10.0.0.1")
@@ -355,3 +362,185 @@ class SensitiveDataTests(AuditLogAPITestCase):
         self.assertEqual(row["new_values"]["password"], "[REDACTED]")
         self.assertEqual(row["new_values"]["nested"]["access_token"], "[REDACTED]")
         self.assertEqual(row["new_values"]["nested"]["ok"], 1)
+
+
+class DisplayNameTests(AuditLogAPITestCase):
+    """user_name / entity_name display fields on GET /api/audit-logs/."""
+
+    def setUp(self):
+        super().setUp()
+        self.grant(self.alice, *READ)
+        self.auth(self.alice)
+        # make_user defaults: first_name="Test", last_name="User".
+        self.document_type, _ = DocumentType.objects.get_or_create(
+            code="invoice", defaults={"name": "Invoice"}
+        )
+        self.currency, _ = Currency.objects.get_or_create(
+            code="AZN", defaults={"name": "Manat"}
+        )
+
+    def row_for(self, event):
+        rows = self.results(self.get_list())
+        return next(row for row in rows if row["id"] == event.id)
+
+    def _make_legal_client(self, company, legal_name="Acme Ltd"):
+        client = Client.objects.create(
+            company=company, client_type=Client.ClientType.LEGAL_ENTITY
+        )
+        ClientLegalEntity.objects.create(
+            client=client,
+            company=company,
+            legal_name=legal_name,
+            voen=f"{uuid.uuid4().int % 10**10:010d}",
+        )
+        return client
+
+    def _make_individual_client(self, company):
+        client = Client.objects.create(
+            company=company, client_type=Client.ClientType.INDIVIDUAL
+        )
+        ClientIndividual.objects.create(
+            client=client, company=company, first_name="John", last_name="Doe"
+        )
+        return client
+
+    def _make_template(self, company, name="Invoice Template"):
+        return DocumentTemplate.objects.create(
+            company=company, document_type=self.document_type, name=name
+        )
+
+    def _make_template_version(self, template, number=1):
+        return TemplateVersion.objects.create(
+            template=template,
+            company=template.company,
+            version_number=number,
+            storage_path=f"v{number}",
+            is_active=(number == 1),
+        )
+
+    def _make_document(self, company, number="INV-001", template=None):
+        return GeneratedDocument.objects.create(
+            company=company,
+            client=None,
+            document_type=self.document_type,
+            template=template or self._make_template(company),
+            document_number=number,
+        )
+
+    def _make_document_version(self, document, template_version, number=1):
+        return GeneratedDocumentVersion.objects.create(
+            generated_document=document,
+            company=document.company,
+            version_number=number,
+            template_version=template_version,
+            currency=self.currency,
+            generation_snapshot={},
+        )
+
+    def test_user_name_matches_actor(self):
+        event = self.record(self.company_a, user=self.alice)
+        row = self.row_for(event)
+        self.assertEqual(row["user_id"], self.alice.id)
+        self.assertEqual(row["user_name"], "Test User")
+
+    def test_user_name_null_without_actor(self):
+        event = self.record(self.company_a, user=None)
+        row = self.row_for(event)
+        self.assertIsNone(row["user_id"])
+        self.assertIsNone(row["user_name"])
+
+    def test_entity_name_legal_client(self):
+        client = self._make_legal_client(self.company_a)
+        event = self.record(
+            self.company_a, user=self.alice, entity_type="client",
+            entity_id=client.id,
+        )
+        self.assertEqual(self.row_for(event)["entity_name"], "Acme Ltd")
+
+    def test_entity_name_individual_client(self):
+        client = self._make_individual_client(self.company_a)
+        event = self.record(
+            self.company_a, user=self.alice, entity_type="client",
+            entity_id=client.id,
+        )
+        self.assertEqual(self.row_for(event)["entity_name"], "John Doe")
+
+    def test_entity_name_template(self):
+        template = self._make_template(self.company_a)
+        event = self.record(
+            self.company_a, user=self.alice, entity_type="document_template",
+            entity_id=template.id,
+        )
+        self.assertEqual(self.row_for(event)["entity_name"], "Invoice Template")
+
+    def test_entity_name_template_version(self):
+        template = self._make_template(self.company_a)
+        version = self._make_template_version(template)
+        event = self.record(
+            self.company_a, user=self.alice,
+            entity_type="document_template_version", entity_id=version.id,
+        )
+        self.assertEqual(
+            self.row_for(event)["entity_name"], "Invoice Template v1"
+        )
+
+    def test_entity_name_generated_document(self):
+        document = self._make_document(self.company_a)
+        event = self.record(
+            self.company_a, user=self.alice, entity_type="generated_document",
+            entity_id=document.id,
+        )
+        self.assertEqual(self.row_for(event)["entity_name"], "INV-001")
+
+    def test_entity_name_generated_document_version(self):
+        template = self._make_template(self.company_a)
+        version = self._make_template_version(template)
+        document = self._make_document(self.company_a, template=template)
+        doc_version = self._make_document_version(document, version)
+        event = self.record(
+            self.company_a, user=self.alice,
+            entity_type="generated_document_version", entity_id=doc_version.id,
+        )
+        self.assertEqual(self.row_for(event)["entity_name"], "INV-001 v1")
+
+    def test_entity_name_user(self):
+        event = self.record(
+            self.company_a, user=self.alice, entity_type="user",
+            entity_id=self.alice.id,
+        )
+        self.assertEqual(self.row_for(event)["entity_name"], "Test User")
+
+    def test_entity_name_unknown_type_is_null(self):
+        event = self.record(
+            self.company_a, user=self.alice, entity_type="no_such_type",
+            entity_id=1,
+        )
+        self.assertIsNone(self.row_for(event)["entity_name"])
+
+    def test_entity_name_missing_entity_is_null(self):
+        event = self.record(
+            self.company_a, user=self.alice, entity_type="client",
+            entity_id=999999,
+        )
+        self.assertIsNone(self.row_for(event)["entity_name"])
+
+    def test_entity_name_soft_deleted_client_still_resolves(self):
+        client = self._make_legal_client(self.company_a)
+        client.deleted_at = timezone.now()
+        client.save(update_fields=["deleted_at"])
+        event = self.record(
+            self.company_a, user=self.alice, entity_type="client",
+            entity_id=client.id,
+        )
+        self.assertEqual(self.row_for(event)["entity_name"], "Acme Ltd")
+
+    def test_entity_name_never_crosses_tenants(self):
+        # A client owned by company B happens to be referenced by a company A
+        # audit row: the label lookup must stay inside company A, so no name
+        # from company B may surface.
+        other_client = self._make_legal_client(self.company_b)
+        event = self.record(
+            self.company_a, user=self.alice, entity_type="client",
+            entity_id=other_client.id,
+        )
+        self.assertIsNone(self.row_for(event)["entity_name"])
