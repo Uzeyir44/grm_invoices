@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 
-import { getTemplate, updateTemplate } from '../../api/templates'
+import { getTemplate, listTemplates, updateTemplate } from '../../api/templates'
 import { fetchDocumentTypes } from '../../api/referenceData'
 import { Button } from '../../components/ui/Button'
 import { Field } from '../../components/ui/Field'
 import { PageContainer } from '../../components/ui/PageContainer'
 import { FIELD_INPUT_CLASS } from '../../components/ui/formClasses'
 import { ApiError, HTTP_STATUS } from '../../types/api'
+import type { DocumentTemplate } from '../../types/documentTemplate'
 import type { DocumentType } from '../../types/referenceData'
 
 type Errors = Record<string, string>
@@ -66,6 +67,12 @@ export function TemplateEditPage() {
 
   const [documentTypes, setDocumentTypes] = useState<DocumentType[] | null>(null)
   const [typesError, setTypesError] = useState(false)
+
+  // The company's existing (non-deleted) templates, used only to disable
+  // document types already owned by a *different* template. The current
+  // template's own type stays selectable. Non-blocking: the backend/database
+  // remain authoritative.
+  const [templates, setTemplates] = useState<DocumentTemplate[] | null>(null)
 
   // Read-only metadata shown alongside the form (never submitted).
   const [readOnly, setReadOnly] = useState({
@@ -167,6 +174,32 @@ export function TemplateEditPage() {
     }
   }, [id, reloadKey])
 
+  useEffect(() => {
+    if (Number.isNaN(id)) return
+    let cancelled = false
+    void listTemplates()
+      .then((data) => {
+        if (cancelled) return
+        setTemplates(Array.isArray(data) ? data : [])
+      })
+      .catch(() => {
+        // Non-blocking UX hint only; the backend remains authoritative.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [id, reloadKey])
+
+  // Document types already owned by another template of this company. The
+  // current template is excluded so its own type remains selectable.
+  const takenByOtherTemplates = useMemo(() => {
+    const ids = new Set<number>()
+    for (const template of templates ?? []) {
+      if (template.id !== id) ids.add(template.document_type)
+    }
+    return ids
+  }, [templates, id])
+
   function retryLoad() {
     setLoading(true)
     setLoadError(undefined)
@@ -179,6 +212,9 @@ export function TemplateEditPage() {
     const errors: Errors = {}
     if (!name.trim()) errors.name = 'Template name is required.'
     if (!documentTypeId) errors.document_type = 'A document type is required.'
+    else if (takenByOtherTemplates.has(Number(documentTypeId))) {
+      errors.document_type = 'A template already exists for this document type.'
+    }
     return errors
   }
 
@@ -334,11 +370,15 @@ export function TemplateEditPage() {
                   aria-describedby={fieldErrors.document_type ? 'document_type-error' : undefined}
                 >
                   <option value="">Select a document type</option>
-                  {documentTypes.map((type) => (
-                    <option key={type.id} value={String(type.id)}>
-                      {type.name}
-                    </option>
-                  ))}
+                  {documentTypes.map((type) => {
+                    const taken = takenByOtherTemplates.has(type.id)
+                    return (
+                      <option key={type.id} value={String(type.id)} disabled={taken}>
+                        {type.name}
+                        {taken ? ' (already has a template)' : ''}
+                      </option>
+                    )
+                  })}
                 </select>
               </Field>
             </div>

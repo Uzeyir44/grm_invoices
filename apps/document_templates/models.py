@@ -75,6 +75,18 @@ class DocumentTemplate(models.Model):
 
     class Meta:
         db_table = "document_templates"
+        constraints = [
+            # A company may have at most ONE current template per DocumentType
+            # (one template instance per document category). Soft-deleted rows
+            # (deleted_at set) are excluded, so deleting a template frees its
+            # slot for a replacement — the same convention as
+            # Company.uq_companies_voen_active.
+            models.UniqueConstraint(
+                fields=["company", "document_type"],
+                condition=Q(deleted_at__isnull=True),
+                name="uq_document_templates_company_type_active",
+            ),
+        ]
         indexes = [
             models.Index(
                 fields=["company", "document_type", "is_active"],

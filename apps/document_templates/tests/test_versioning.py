@@ -79,9 +79,12 @@ class ActivationSequentialTests(TestCase, TemplateVersionFixtureMixin):
         self.assertEqual(self._active_versions(self.template), [self.v1.id])
 
     def test_activate_version_from_other_template_is_rejected(self):
+        other_type, _ = DocumentType.objects.get_or_create(
+            code="consulting_contract", defaults={"name": "Consulting Contract"}
+        )
         other_template = DocumentTemplate.objects.create(
             company=self.template.company,
-            document_type=self.template.document_type,
+            document_type=other_type,
             name="Other Template",
         )
         foreign = self._make_version(other_template, 1, is_active=True)

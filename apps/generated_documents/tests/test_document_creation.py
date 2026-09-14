@@ -21,6 +21,7 @@ from django.core.files.base import ContentFile
 from django.db import IntegrityError, transaction
 from django.test import TransactionTestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 from docx import Document
 
 from rest_framework import status
@@ -427,6 +428,68 @@ class GenerationIntegrationTests(DocumentCreationTestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.json()["storage"], {"docx": True, "pdf": True})
+
+
+class TemplateResolutionTests(DocumentCreationTestCase):
+    """
+    Template resolution during document creation: exactly the company's unique
+    (company, document_type) template is resolved deterministically, and
+    missing / soft-deleted templates surface the controlled error.
+    """
+
+    def _service_call(self, **kwargs):
+        return create_generated_document(
+            company=self.company_a,
+            user=self.alice,
+            client=self.client_a,
+            document_type_id=self.document_type.id,
+            currency_id=self.currency.id,
+            items=[
+                {
+                    "description": "Consulting",
+                    "quantity": Decimal("2"),
+                    "unit": "h",
+                    "unit_price": Decimal("100"),
+                    "discount_percent": Decimal("0"),
+                    "vat_rate_percent": Decimal("18"),
+                }
+            ],
+            **kwargs,
+        )
+
+    def test_resolves_company_unique_template_deterministically(self):
+        document = self._service_call()
+        self.assertEqual(document.template_id, self.template_a.id)
+        version = document.versions.get()
+        self.assertEqual(version.template_version_id, self.template_version_a.id)
+
+    def test_soft_deleted_template_is_not_resolved(self):
+        self.template_a.deleted_at = timezone.now()
+        self.template_a.save(update_fields=["deleted_at"])
+        with self.assertRaises(DocumentCreationError) as manager:
+            self._service_call()
+        self.assertIn("No active document template", str(manager.exception))
+        self.assertFalse(
+            GeneratedDocument.objects.filter(company=self.company_a).exists()
+        )
+
+    def test_missing_template_for_type_raises_controlled_error(self):
+        other_type, _ = DocumentType.objects.get_or_create(
+            code="consulting_contract", defaults={"name": "Consulting Contract"}
+        )
+        with self.assertRaises(DocumentCreationError) as manager:
+            create_generated_document(
+                company=self.company_a,
+                user=self.alice,
+                client=self.client_a,
+                document_type_id=other_type.id,
+                currency_id=self.currency.id,
+                items=[],
+            )
+        self.assertIn("No active document template", str(manager.exception))
+        self.assertFalse(
+            GeneratedDocument.objects.filter(company=self.company_a).exists()
+        )
 
 
 class ConcurrencyTests(TransactionTestCase):

@@ -66,21 +66,23 @@ def _resolve_currency(currency_id):
 def _resolve_template(company, document_type_id):
     if not DocumentType.objects.filter(pk=document_type_id).exists():
         raise DocumentCreationError("Unknown document type.")
-    template = (
-        DocumentTemplate.objects.filter(
+    # Exactly zero or one active template may exist for (company, document
+    # type): the DB enforces UNIQUE(company, document_type) among non-deleted
+    # templates. A deterministic `.get()` is used instead of `.first()`, so
+    # resolution can never depend on arbitrary ordering — and a corrupted
+    # duplicate would surface loudly rather than being silently picked.
+    try:
+        template = DocumentTemplate.objects.get(
             company=company,
             document_type_id=document_type_id,
             is_active=True,
             deleted_at__isnull=True,
         )
-        .order_by("id")
-        .first()
-    )
-    if template is None:
+    except DocumentTemplate.DoesNotExist:
         raise DocumentCreationError(
             "No active document template exists in this company for the "
             "selected document type."
-        )
+        ) from None
     template_version = (
         template.versions.filter(is_active=True).order_by("-version_number").first()
     )

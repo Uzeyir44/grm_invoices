@@ -402,8 +402,9 @@ class TenantSafetyTests(GenerationServiceTestCase):
             _assert_template_version_matches_document,
         )
 
+        other_type = DocumentType.objects.create(code="contract", name="Contract")
         template_b = DocumentTemplate.objects.create(
-            company=self.company, document_type=self.document_type, name="Other"
+            company=self.company, document_type=other_type, name="Other"
         )
         tv_b = TemplateVersion.objects.create(
             template=template_b,

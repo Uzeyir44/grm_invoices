@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
-import { createTemplate } from '../../api/templates'
+import { createTemplate, listTemplates } from '../../api/templates'
 import { fetchDocumentTypes } from '../../api/referenceData'
 import { Button } from '../../components/ui/Button'
 import { Field } from '../../components/ui/Field'
 import { PageContainer } from '../../components/ui/PageContainer'
 import { FIELD_INPUT_CLASS } from '../../components/ui/formClasses'
 import { ApiError, HTTP_STATUS } from '../../types/api'
+import type { DocumentTemplate } from '../../types/documentTemplate'
 import type { DocumentType } from '../../types/referenceData'
 
 type Errors = Record<string, string>
@@ -54,6 +55,12 @@ export function TemplateCreatePage() {
   const [typesError, setTypesError] = useState(false)
   const [typesReloadKey, setTypesReloadKey] = useState(0)
 
+  // The company's existing (non-deleted) templates. Used only as a UX hint to
+  // disable document types that already have a template — the backend/database
+  // remain authoritative. A failure here is non-blocking: the form still
+  // submits and the backend rejects a duplicate with a clear message.
+  const [templates, setTemplates] = useState<DocumentTemplate[] | null>(null)
+
   const [fieldErrors, setFieldErrors] = useState<Errors>({})
   const [formError, setFormError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
@@ -79,6 +86,33 @@ export function TemplateCreatePage() {
     }
   }, [typesReloadKey])
 
+  useEffect(() => {
+    let cancelled = false
+    void listTemplates()
+      .then((data) => {
+        if (cancelled) return
+        setTemplates(Array.isArray(data) ? data : [])
+      })
+      .catch(() => {
+        // Leave `templates` as-is (null) so no option is disabled and the
+        // backend remains the authority on duplicates.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [typesReloadKey])
+
+  // Document types that already have a template for this company. All listed
+  // templates are non-deleted (the backend list excludes soft-deleted rows),
+  // matching the DB invariant "one non-deleted template per document type".
+  const takenDocumentTypeIds = useMemo(() => {
+    const ids = new Set<number>()
+    for (const template of templates ?? []) {
+      ids.add(template.document_type)
+    }
+    return ids
+  }, [templates])
+
   const retryTypes = useCallback(() => {
     setTypesLoading(true)
     setTypesError(false)
@@ -89,6 +123,9 @@ export function TemplateCreatePage() {
     const errors: Errors = {}
     if (!name.trim()) errors.name = 'Template name is required.'
     if (!documentTypeId) errors.document_type = 'A document type is required.'
+    else if (takenDocumentTypeIds.has(Number(documentTypeId))) {
+      errors.document_type = 'A template already exists for this document type.'
+    }
     return errors
   }
 
@@ -182,11 +219,15 @@ export function TemplateCreatePage() {
                 aria-describedby={fieldErrors.document_type ? 'document_type-error' : undefined}
               >
                 <option value="">Select a document type</option>
-                {documentTypes.map((type) => (
-                  <option key={type.id} value={String(type.id)}>
-                    {type.name}
-                  </option>
-                ))}
+                {documentTypes.map((type) => {
+                  const taken = takenDocumentTypeIds.has(type.id)
+                  return (
+                    <option key={type.id} value={String(type.id)} disabled={taken}>
+                      {type.name}
+                      {taken ? ' (already has a template)' : ''}
+                    </option>
+                  )
+                })}
               </select>
             </Field>
           </div>

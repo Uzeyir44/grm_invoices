@@ -1,6 +1,7 @@
 import uuid
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError, transaction
 from django.urls import reverse
 
 from rest_framework import status
@@ -140,7 +141,7 @@ class DocumentTemplateTenantIsolationTests(DocumentTemplateAPITestCase):
             self.company_a, name="Template A1"
         )
         self.template_a2 = self.make_template_row(
-            self.company_a, name="Template A2"
+            self.company_a, name="Template A2", document_type=self.contract_type
         )
         self.template_b1 = self.make_template_row(
             self.company_b, name="Template B1"
@@ -270,7 +271,9 @@ class DocumentTemplateActivationTests(DocumentTemplateAPITestCase):
         self.template = self.make_template_row(self.company_a, name="Toggleable")
 
     def test_created_template_is_active_by_default(self):
-        created = self.create_template(self.alice, self.template_payload())
+        created = self.create_template(
+            self.alice, self.template_payload(document_type=self.contract_type.id)
+        )
         self.assertEqual(created.status_code, status.HTTP_201_CREATED)
         self.assertIs(created.json()["is_active"], True)
 
@@ -555,7 +558,9 @@ class DocumentTemplateFileRetrievalTests(DocumentTemplateFileAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_download_when_no_file_returns_404(self):
-        no_file = self.make_template_row(self.company_a, name="Empty Template")
+        no_file = self.make_template_row(
+            self.company_a, name="Empty Template", document_type=self.contract_type
+        )
         self.auth(self.alice)
         response = self.client.get(self.template_file_url(no_file.id))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -583,7 +588,9 @@ class DocumentTemplateFileDeletionTests(DocumentTemplateFileAPITestCase):
         self.assertFalse(bool(self.template.file))
 
     def test_delete_when_no_file_returns_404(self):
-        empty = self.make_template_row(self.company_a, name="Empty Delete Template")
+        empty = self.make_template_row(
+            self.company_a, name="Empty Delete Template", document_type=self.contract_type
+        )
         self.auth(self.alice)
         response = self.client.delete(self.template_file_url(empty.id))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -745,7 +752,9 @@ class DocumentTemplateVersionCreateTests(DocumentTemplateVersionAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_version_create_requires_a_file(self):
-        empty = self.make_template_row(self.company_a, name="No File Template")
+        empty = self.make_template_row(
+            self.company_a, name="No File Template", document_type=self.contract_type
+        )
         response = self.client.post(self.versions_url(empty.id))
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
@@ -867,3 +876,133 @@ class DocumentTemplateVersionTenantIsolationTests(DocumentTemplateVersionAPITest
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.json()), 1)
         self.assertEqual(response.json()[0]["id"], self.alice_v["id"])
+
+
+class DocumentTemplateOnePerCompanyTypeTests(DocumentTemplateAPITestCase):
+    """
+    Business rule: a company may have at most one non-deleted template per
+    DocumentType, enforced at the API and database levels.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.grant(self.alice, *ALL_DOCUMENT_TEMPLATE_PERMISSIONS)
+        self.grant(self.carol, *ALL_DOCUMENT_TEMPLATE_PERMISSIONS)
+
+    def test_company_can_create_one_template_per_document_type(self):
+        self.auth(self.alice)
+        invoice = self.create_template(self.alice, self.template_payload())
+        self.assertEqual(invoice.status_code, status.HTTP_201_CREATED)
+        contract = self.create_template(
+            self.alice,
+            self.template_payload(
+                name="Consulting", document_type=self.contract_type.id
+            ),
+        )
+        self.assertEqual(contract.status_code, status.HTTP_201_CREATED)
+
+    def test_second_template_for_same_type_is_rejected(self):
+        self.auth(self.alice)
+        first = self.create_template(self.alice, self.template_payload())
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+
+        duplicate = self.create_template(
+            self.alice, self.template_payload(name="Second Invoice")
+        )
+        self.assertEqual(duplicate.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            duplicate.json()["document_type"],
+            ["A template already exists for this document type."],
+        )
+        self.assertEqual(
+            DocumentTemplate.objects.filter(company=self.company_a).count(), 1
+        )
+
+    def test_duplicate_rejection_does_not_expose_database_internals(self):
+        self.auth(self.alice)
+        self.create_template(self.alice, self.template_payload())
+        duplicate = self.create_template(
+            self.alice, self.template_payload(name="Second Invoice")
+        )
+        body = duplicate.content.decode()
+        self.assertNotIn("IntegrityError", body)
+        self.assertNotIn("uq_document_templates_company_type_active", body)
+        self.assertNotIn("constraint", body.lower())
+
+    def test_different_company_can_create_same_document_type(self):
+        self.auth(self.alice)
+        self.assertEqual(
+            self.create_template(self.alice, self.template_payload()).status_code,
+            status.HTTP_201_CREATED,
+        )
+        self.auth(self.carol)
+        self.assertEqual(
+            self.create_template(self.carol, self.template_payload()).status_code,
+            status.HTTP_201_CREATED,
+        )
+
+    def test_update_to_already_taken_type_is_rejected(self):
+        self.auth(self.alice)
+        invoice = self.create_template(self.alice, self.template_payload()).json()
+        self.create_template(
+            self.alice,
+            self.template_payload(
+                name="Consulting", document_type=self.contract_type.id
+            ),
+        )
+        response = self.client.patch(
+            self.template_detail_url(invoice["id"]),
+            {"document_type": self.contract_type.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.json()["document_type"],
+            ["A template already exists for this document type."],
+        )
+
+    def test_update_keeping_own_type_and_to_free_type_is_allowed(self):
+        self.auth(self.alice)
+        invoice = self.create_template(self.alice, self.template_payload()).json()
+        # Keeping its own type is allowed (this is the same template instance).
+        same = self.client.patch(
+            self.template_detail_url(invoice["id"]),
+            {"document_type": self.invoice_type.id},
+            format="json",
+        )
+        self.assertEqual(same.status_code, status.HTTP_200_OK)
+        # Moving to a free type is allowed.
+        free_type, _ = DocumentType.objects.get_or_create(
+            code="handover_certificate", defaults={"name": "Handover Certificate"}
+        )
+        moved = self.client.patch(
+            self.template_detail_url(invoice["id"]),
+            {"document_type": free_type.id},
+            format="json",
+        )
+        self.assertEqual(moved.status_code, status.HTTP_200_OK)
+        self.assertEqual(moved.json()["document_type_code"], "handover_certificate")
+
+    def test_database_rejects_duplicate_non_deleted_rows(self):
+        self.make_template_row(self.company_a)
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self.make_template_row(self.company_a)
+
+    def test_soft_deleted_template_can_be_replaced(self):
+        self.auth(self.alice)
+        first = self.create_template(self.alice, self.template_payload()).json()
+        self.assertEqual(
+            self.client.delete(self.template_detail_url(first["id"])).status_code,
+            status.HTTP_204_NO_CONTENT,
+        )
+        replacement = self.create_template(
+            self.alice, self.template_payload(name="Replacement")
+        )
+        self.assertEqual(replacement.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            DocumentTemplate.objects.filter(
+                company=self.company_a, deleted_at__isnull=True
+            ).count(),
+            1,
+        )

@@ -634,6 +634,17 @@ POST   /api/document-templates/<id>/versions/<vid>/activate/   activate a versio
 - A template is created from the metadata fields only:
   `document_type` (the shared lookup id), `name`, and optionally `is_active`
   (defaults to `true`).
+- **One template per document type per company.** A company may have at most
+  one non-deleted `DocumentTemplate` for a given `DocumentType`. Creating a
+  second template for an already-used document type — or updating a template's
+  `document_type` to one already owned by another template of the same company
+  — is rejected with
+  `400 {"document_type": ["A template already exists for this document type."]}`.
+  This is enforced at the **database** level by a partial unique constraint
+  (`UNIQUE(company, document_type) WHERE deleted_at IS NULL`), so concurrent
+  requests cannot create duplicates. Different companies may still each have a
+  template for the same `DocumentType` (multi-tenancy). Soft-deleting a
+  template frees its slot, so a replacement can then be created.
 - Status codes follow DRF conventions: 201 on create/upload, 204 on delete,
   400 / 401 / 403 / 404 as appropriate.
 
@@ -1641,6 +1652,12 @@ Company
   `templates/company_<id>/<id>.docx`.
 - The table also stores metadata (`name`, `is_active`, timestamps, soft delete
   via `deleted_at`).
+- A company may have **at most one non-deleted template per `DocumentType`**.
+  This is enforced by a partial unique constraint
+  `UNIQUE(company, document_type) WHERE deleted_at IS NULL`
+  (`uq_document_templates_company_type_active`), following the same
+  soft-delete-aware convention as `uq_companies_voen_active`. Soft-deleted rows
+  are excluded, so deleting a template frees its slot for a replacement.
 - There is an index optimized for `(company, document_type, is_active)`.
 - **`TemplateVersion`** is an immutable edition of a template's file. Old
   versions are never deleted or edited, so `template` uses `PROTECT`

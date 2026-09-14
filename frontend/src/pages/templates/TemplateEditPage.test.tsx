@@ -48,6 +48,7 @@ const secondTemplate = {
 function stubBackend(handlers: {
   onGetTemplate?: (url: string) => Response | Promise<Response>
   onPatch?: (url: string, init: RequestInit) => Response | Promise<Response>
+  templates?: unknown[]
 } = {}) {
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
@@ -59,6 +60,9 @@ function stubBackend(handlers: {
       if (handlers.onPatch) return Promise.resolve(handlers.onPatch(url, init as RequestInit))
       const body = JSON.parse(String((init as RequestInit).body))
       return Promise.resolve(jsonResponse(200, { ...templateDetail, ...body }))
+    }
+    if (method === 'GET' && /\/document-templates\/$/.test(url)) {
+      return Promise.resolve(jsonResponse(200, handlers.templates ?? []))
     }
     if (method === 'GET' && url.includes('/document-templates/2/')) {
       if (handlers.onGetTemplate) return Promise.resolve(handlers.onGetTemplate(url))
@@ -110,6 +114,17 @@ describe('TemplateEditPage', () => {
 
     expect(screen.getByText('Read-only information')).toBeInTheDocument()
     expect(screen.getByText('File uploads')).toBeInTheDocument()
+  })
+
+  it('disables types owned by another template but keeps its own type', async () => {
+    stubBackend({ templates: [templateDetail, secondTemplate] })
+    renderEditAt('/templates/1/edit')
+    await screen.findByLabelText(/template name/i)
+
+    expect(screen.getByRole('option', { name: /invoice/i })).toBeEnabled()
+    expect(
+      screen.getByRole('option', { name: /consulting contract/i }),
+    ).toBeDisabled()
   })
 
   it('saves through PATCH and returns to the detail page', async () => {

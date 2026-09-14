@@ -64,6 +64,41 @@ class DocumentTemplateSerializer(serializers.ModelSerializer):
     def get_file_name(self, obj):
         return obj.file.name if obj.file else None
 
+    def validate(self, attrs):
+        """
+        One template instance per (company, document_type).
+
+        A company may have at most one non-deleted ``DocumentTemplate`` for a
+        given ``DocumentType``. The owning company always comes from the
+        context (``request.user.company``), never from the payload, so a client
+        cannot bypass the rule by supplying another ``company_id``. This is a
+        friendly validation path; the DB partial unique constraint
+        (``uq_document_templates_company_type_active``) remains the
+        authoritative backstop for concurrent requests.
+        """
+        company = self.context.get("company")
+        document_type = attrs.get("document_type")
+        if document_type is None and self.instance is not None:
+            document_type = self.instance.document_type
+
+        if company is not None and document_type is not None:
+            existing = DocumentTemplate.objects.filter(
+                company=company,
+                document_type=document_type,
+                deleted_at__isnull=True,
+            )
+            if self.instance is not None:
+                existing = existing.exclude(pk=self.instance.pk)
+            if existing.exists():
+                raise serializers.ValidationError(
+                    {
+                        "document_type": [
+                            "A template already exists for this document type."
+                        ]
+                    }
+                )
+        return attrs
+
 
 class DocumentTemplateFileSerializer(serializers.Serializer):
     """

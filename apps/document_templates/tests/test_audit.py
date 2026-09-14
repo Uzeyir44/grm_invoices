@@ -66,10 +66,13 @@ class TemplateAuditTestCase(APITestCase):
     def auth(self, user):
         self.client.force_authenticate(user=user)
 
-    def create_template(self, name="Invoice Template"):
+    def create_template(self, name="Invoice Template", document_type=None):
         response = self.client.post(
             reverse("document-template-list-create"),
-            {"name": name, "document_type": self.document_type.id},
+            {
+                "name": name,
+                "document_type": document_type or self.document_type.id,
+            },
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -182,7 +185,12 @@ class TemplateVersionAuditTests(TemplateAuditTestCase):
     def test_failed_version_create_records_no_event(self):
         # A template whose file contains an invalid placeholder is rejected at
         # version-creation time, so no version and no audit event are created.
-        bad_template_id = self.create_template(name="Bad Template")
+        bad_template_id = self.create_template(
+            name="Bad Template",
+            document_type=DocumentType.objects.get_or_create(
+                code="consulting_contract", defaults={"name": "Consulting Contract"}
+            )[0].id,
+        )
         upload = SimpleUploadedFile(
             "bad.docx",
             build_invalid_template_docx(),

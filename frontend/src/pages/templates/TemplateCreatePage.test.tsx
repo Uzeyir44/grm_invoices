@@ -3,7 +3,13 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TemplateCreatePage } from './TemplateCreatePage'
-import { documentTypes, jsonResponse, templateDetail } from '../../test/templateFixtures'
+import type { DocumentTemplate } from '../../types/documentTemplate'
+import {
+  documentTypes,
+  jsonResponse,
+  templateDetail,
+  templateSummaries,
+} from '../../test/templateFixtures'
 
 function DetailMarker() {
   const { templateId } = useParams()
@@ -28,11 +34,14 @@ describe('TemplateCreatePage', () => {
   const fetchMock = vi.fn()
   const user = userEvent.setup()
 
-  function stubCreate() {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+  function stubCreate(existingTemplates: DocumentTemplate[] = []) {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes('/reference-data/document-types/')) {
         return Promise.resolve(jsonResponse(200, documentTypes))
+      }
+      if ((init?.method ?? 'GET') === 'GET' && /\/document-templates\/$/.test(url)) {
+        return Promise.resolve(jsonResponse(200, existingTemplates))
       }
       return Promise.resolve(jsonResponse(201, templateDetail))
     })
@@ -87,8 +96,10 @@ describe('TemplateCreatePage', () => {
 
     expect(screen.getByText('Template name is required.')).toBeInTheDocument()
     expect(screen.getByText('A document type is required.')).toBeInTheDocument()
-    const postCalls = fetchMock.mock.calls.filter(([url]) =>
-      String(url).endsWith('/document-templates/'),
+    const postCalls = fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        String(url).endsWith('/document-templates/') &&
+        (init as RequestInit | undefined)?.method === 'POST',
     )
     expect(postCalls).toHaveLength(0)
   })
@@ -114,10 +125,13 @@ describe('TemplateCreatePage', () => {
   })
 
   it('shows backend validation errors and preserves entered values', async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes('/reference-data/document-types/')) {
         return Promise.resolve(jsonResponse(200, documentTypes))
+      }
+      if ((init?.method ?? 'GET') === 'GET' && /\/document-templates\/$/.test(url)) {
+        return Promise.resolve(jsonResponse(200, []))
       }
       return Promise.resolve(jsonResponse(400, { name: ['A template with this name already exists.'] }))
     })
@@ -132,12 +146,53 @@ describe('TemplateCreatePage', () => {
     expect(screen.getByLabelText(/template name/i)).toHaveValue('Duplicate')
   })
 
-  it('prevents duplicate submissions while a request is in flight', async () => {
-    let resolvePost: (value: Response) => void = () => {}
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+  it('disables document types that already have a template', async () => {
+    stubCreate([templateSummaries[0]])
+    renderCreate()
+    await screen.findByLabelText(/template name/i)
+
+    expect(screen.getByRole('option', { name: /invoice/i })).toBeDisabled()
+    expect(
+      screen.getByRole('option', { name: /consulting contract/i }),
+    ).toBeEnabled()
+  })
+
+  it('shows the duplicate-template validation message from the backend', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes('/reference-data/document-types/')) {
         return Promise.resolve(jsonResponse(200, documentTypes))
+      }
+      if ((init?.method ?? 'GET') === 'GET' && /\/document-templates\/$/.test(url)) {
+        return Promise.resolve(jsonResponse(200, []))
+      }
+      return Promise.resolve(
+        jsonResponse(400, {
+          document_type: ['A template already exists for this document type.'],
+        }),
+      )
+    })
+    renderCreate()
+    await screen.findByLabelText(/template name/i)
+
+    await user.type(screen.getByLabelText(/template name/i), 'Standard Invoice')
+    await user.selectOptions(screen.getByLabelText(/document type/i), '1')
+    await user.click(screen.getByRole('button', { name: /create template/i }))
+
+    expect(
+      await screen.findByText(/A template already exists for this document type./i),
+    ).toBeInTheDocument()
+  })
+
+  it('prevents duplicate submissions while a request is in flight', async () => {
+    let resolvePost: (value: Response) => void = () => {}
+    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/reference-data/document-types/')) {
+        return Promise.resolve(jsonResponse(200, documentTypes))
+      }
+      if ((init?.method ?? 'GET') === 'GET' && /\/document-templates\/$/.test(url)) {
+        return Promise.resolve(jsonResponse(200, []))
       }
       return new Promise<Response>((resolve) => {
         resolvePost = resolve
@@ -153,8 +208,10 @@ describe('TemplateCreatePage', () => {
     const creating = screen.getByRole('button', { name: /creating/i })
     expect(creating).toBeDisabled()
     await user.click(creating)
-    const postCalls = fetchMock.mock.calls.filter(([url]) =>
-      String(url).endsWith('/document-templates/'),
+    const postCalls = fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        String(url).endsWith('/document-templates/') &&
+        (init as RequestInit | undefined)?.method === 'POST',
     )
     expect(postCalls).toHaveLength(1)
 
