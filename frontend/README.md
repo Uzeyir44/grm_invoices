@@ -614,7 +614,9 @@ trigger the refresh flow.
 /admin/companies/new    → provision a company + its initial administrator
 /admin/companies/:companyId       → company detail (edit / activate / deactivate)
 /admin/companies/:companyId/edit  → edit company metadata
-/admin/users            → placeholder section
+/admin/users            → user list (AdminRoute, inside AdminShell)
+/admin/users/:userId    → user detail (edit / activate / deactivate / roles)
+/admin/users/:userId/edit → edit user metadata
 /admin/roles            → placeholder section
 /admin/permissions      → placeholder section
 /admin/reference-data   → placeholder section
@@ -743,12 +745,52 @@ permission:
   everything back. The operation never creates a second platform company or
   assigns a system-scoped role.
 
+### Admin user management (implemented)
+
+Global management of ordinary tenant users across all companies, backed by the
+System Admin user API (`apps/system_admin/user_management.py` /
+`apps/system_admin/api/user_serializers.py`) and gated by the
+`system.users.manage` system permission:
+
+| Backend endpoint | Operation | API module fn |
+|---|---|---|
+| `GET /api/admin/users/` | global user list | `listAdminUsers()` |
+| `GET /api/admin/users/:id/` | user detail (+ assignable company roles) | `getAdminUser(id)` |
+| `PATCH /api/admin/users/:id/` | update `first_name` / `last_name` / `email` | `updateAdminUser(id, input)` |
+| `POST /api/admin/users/:id/activate/` | activate | `activateAdminUser(id)` |
+| `POST /api/admin/users/:id/deactivate/` | deactivate | `deactivateAdminUser(id)` |
+| `GET /api/admin/users/:id/roles/` | list assigned roles | `listAdminUserRoles(id)` |
+| `POST /api/admin/users/:id/roles/` | assign a tenant role | `assignAdminUserRole(id, roleId)` |
+| `DELETE /api/admin/users/:id/roles/:roleId/` | remove a tenant role | `removeAdminUserRole(id, roleId)` |
+
+- **List** (`/admin/users`, `AdminUsersPage`) — loading, empty, and error/retry
+  states; a responsive table with user (name + email), company, active status,
+  and assigned roles. Real API data only (no fabricated counts).
+- **Detail** (`/admin/users/:userId`, `AdminUserDetailPage`) — identity,
+  company, active status, timestamps, assigned tenant roles, an **Edit
+  metadata** link, **Activate/Deactivate** (deactivate requires an inline
+  confirmation), and the tenant-role assignment controls.
+- **Edit** (`/admin/users/:userId/edit`, `AdminUserEditPage`) — `PATCH` form for
+  `first_name`, `last_name`, and `email`. Company, password, MFA state,
+  lifecycle, and System Admin scope are never editable; a user cannot be moved
+  between companies. Email uniqueness is per company (the backend enforces the
+  existing company-scoped constraint).
+- **Role assignment** — the detail page lists the user's assigned tenant roles
+  (with **Remove**) and offers the user's company's remaining tenant roles in an
+  **Add role** picker. System roles, global role templates, and other
+  companies' roles are rejected by the backend and are never offered. The
+  frontend filtering is UX only; the backend is authoritative.
+- **System Admin protection** — accounts in the reserved platform company are
+  a separate principal. They are excluded from the user list and return 404
+  from every user-management endpoint, so a System Admin account can never be
+  edited, activated/deactivated, or have tenant roles assigned/removed here.
+
 ### Current status
 
-Companies is implemented as above. The remaining Admin sections (Users, Roles &
-Permissions, Permission Catalog, Reference Data, Audit & Security, Backups,
-Settings) are **placeholder pages** that state their functionality arrives in a
-later phase. There are no fabricated dashboard statistics.
+Companies and Users are implemented as above. The remaining Admin sections
+(Roles & Permissions, Permission Catalog, Reference Data, Audit & Security,
+Backups, Settings) are **placeholder pages** that state their functionality
+arrives in a later phase. There are no fabricated dashboard statistics.
 
 ## Testing
 

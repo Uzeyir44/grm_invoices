@@ -37,8 +37,8 @@ describe('Admin routing', () => {
     setAdminAccessToken('admin-token')
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input)
-      // The companies list is a real endpoint now; return an empty list.
-      if (url.includes('/admin/companies/')) {
+      // The companies and users lists are real endpoints now; return empty lists.
+      if (url.includes('/admin/companies/') || url.includes('/admin/users/')) {
         return Promise.resolve(jsonResponse(200, []))
       }
       return Promise.resolve(jsonResponse(200, adminMe(overrides)))

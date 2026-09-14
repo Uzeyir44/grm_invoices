@@ -6,6 +6,12 @@ from apps.system_admin.api.views import (
     AdminCompanyDetailView,
     AdminCompanyListView,
     AdminCompanyProvisionView,
+    AdminUserActivateView,
+    AdminUserDeactivateView,
+    AdminUserDetailView,
+    AdminUserListView,
+    AdminUserRoleDetailView,
+    AdminUserRoleListCreateView,
     SystemAdminMeView,
     SystemAdminTokenObtainView,
     SystemAdminTokenRefreshView,
@@ -52,5 +58,36 @@ urlpatterns = [
         "companies/<int:pk>/deactivate/",
         AdminCompanyDeactivateView.as_view(),
         name="admin-company-deactivate",
+    ),
+    # User management (Phase 5).
+    path(
+        "users/",
+        AdminUserListView.as_view(),
+        name="admin-user-list",
+    ),
+    path(
+        "users/<int:pk>/",
+        AdminUserDetailView.as_view(),
+        name="admin-user-detail",
+    ),
+    path(
+        "users/<int:pk>/activate/",
+        AdminUserActivateView.as_view(),
+        name="admin-user-activate",
+    ),
+    path(
+        "users/<int:pk>/deactivate/",
+        AdminUserDeactivateView.as_view(),
+        name="admin-user-deactivate",
+    ),
+    path(
+        "users/<int:pk>/roles/",
+        AdminUserRoleListCreateView.as_view(),
+        name="admin-user-role-list-create",
+    ),
+    path(
+        "users/<int:pk>/roles/<int:role_id>/",
+        AdminUserRoleDetailView.as_view(),
+        name="admin-user-role-detail",
     ),
 ]

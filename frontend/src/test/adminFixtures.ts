@@ -1,4 +1,5 @@
 import type { AdminCompany } from '../types/adminCompany'
+import type { AdminUser, AdminUserDetail } from '../types/adminUser'
 import type { SystemAdmin } from '../types/adminAuth'
 
 export function jsonResponse(
@@ -36,6 +37,35 @@ export function adminCompany(overrides: Partial<AdminCompany> = {}): AdminCompan
     is_platform: false,
     created_at: '2026-09-01T10:00:00+00:00',
     updated_at: '2026-09-02T10:00:00+00:00',
+    ...overrides,
+  }
+}
+
+/** The actual shape returned by the backend `AdminUserSerializer`. */
+export function adminUser(overrides: Partial<AdminUser> = {}): AdminUser {
+  return {
+    id: 21,
+    email: 'alice@acme.example',
+    first_name: 'Alice',
+    last_name: 'Anderson',
+    is_active: true,
+    company_id: 5,
+    company_name: 'Acme',
+    deleted_at: null,
+    created_at: '2026-09-01T10:00:00+00:00',
+    updated_at: '2026-09-02T10:00:00+00:00',
+    roles: [],
+    ...overrides,
+  }
+}
+
+/** The actual shape returned by the backend `AdminUserDetailSerializer`. */
+export function adminUserDetail(
+  overrides: Partial<AdminUserDetail> = {},
+): AdminUserDetail {
+  return {
+    ...adminUser(),
+    company_roles: [],
     ...overrides,
   }
 }
