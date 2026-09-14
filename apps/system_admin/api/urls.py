@@ -1,5 +1,6 @@
 from django.urls import path
 
+from apps.system_admin.api.audit_views import AdminAuditLogListView
 from apps.system_admin.api.reference_data_views import (
     AdminAddressTypeDetailView,
     AdminAddressTypeListCreateView,
@@ -203,5 +204,11 @@ urlpatterns = [
         "reference-data/exchange-rates/",
         AdminExchangeRateListView.as_view(),
         name="admin-reference-exchange-rate-list",
+    ),
+    # Platform audit (Phase 8).
+    path(
+        "audit/",
+        AdminAuditLogListView.as_view(),
+        name="admin-audit-log-list",
     ),
 ]

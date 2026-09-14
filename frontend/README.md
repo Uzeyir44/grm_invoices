@@ -623,7 +623,7 @@ trigger the refresh flow.
 /admin/roles/:roleId/edit → edit role name
 /admin/permissions      → permission catalog (read-only)
 /admin/reference-data   → reference data administration (AdminRoute, inside AdminShell)
-/admin/audit            → placeholder section
+/admin/audit            → platform audit & security (read-only, inside AdminShell)
 /admin/backups          → placeholder section
 /admin/settings         → placeholder section
 *              → not found
@@ -885,10 +885,49 @@ Global reference-data administration at `/admin/reference-data`, backed by
 - Frontend catalogs and operations mirror the backend exactly; the backend
   remains authoritative.
 
+### Admin audit & security (implemented)
+
+Read-only platform audit investigation at `/admin/audit`, backed by
+`apps/system_admin/api/audit_views.py` and gated by the `system.audit.read`
+system permission:
+
+| Backend endpoint | Operation | API module fn |
+|---|---|---|
+| `GET /api/admin/audit/` | platform audit list (paginated envelope) | `listAdminAuditLogs(params)` |
+
+- **Platform audit dataset only.** The endpoint serves `AuditLog` rows whose
+  `company` is the reserved platform company — i.e. events written through
+  `create_platform_audit_log` (company provisioning/updates/status changes,
+  user/role/reference-data administration). Tenant audit rows are **never**
+  exposed here. The query is globally scoped; it never uses
+  `request.user.company`.
+- **Read-only.** There is no create/update/delete/detail endpoint; audit rows
+  are immutable evidence. The backend enforces this (405 on write methods) and
+  the page renders no mutation controls.
+- **Filters** (all optional, composable, validated — invalid values are a 400):
+  `action`, `entity_type`, `entity_id`, `user_id`, `target_company_id`,
+  `created_after` (`>=`), `created_before` (`<=`). `target_company_id` matches
+  platform events whose `new_values` payload records that company (JSONB
+  containment; no new column, no arbitrary JSON-path querying).
+- **Display:** the acting admin (`user_name`), the entity (`entity_name` for
+  company entities, else `<type> #<id>`), the target company
+  (`target_company_name (Company #id)` when resolvable, else `Company #id`),
+  IP address, and a per-row **View** expansion showing `previous_values` /
+  `new_values` as readable JSON. Display names are resolved in a single batch
+  query per page — never N+1.
+- **Sensitive data:** audit payloads are redacted at write time, and the API
+  exposes no credentials (no passwords, MFA secrets, tokens, or hashes).
+- **Pagination/ordering:** DRF `PageNumberPagination` envelope
+  `{ count, next, previous, results }`, default page size 50 (`?page` /
+  `?page_size`, max 100), ordered `-created_at`, `-id` (newest first). An
+  out-of-range page is a 404.
+- The tenant audit UI (`/audit-logs`, `audit_logs.read`) is separate and
+  unchanged; the two audit contexts are deliberately not merged.
+
 ### Current status
 
-Companies, Users, Roles & Permissions, and Reference Data are implemented as
-above. The remaining Admin sections (Audit & Security, Backups, Settings) are
+Companies, Users, Roles & Permissions, Reference Data, and Audit & Security are
+implemented as above. The remaining Admin sections (Backups, Settings) are
 **placeholder pages** that state their functionality arrives in a later phase.
 There are no fabricated dashboard statistics.
 

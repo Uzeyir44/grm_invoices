@@ -43,7 +43,8 @@ describe('Admin routing', () => {
         url.includes('/admin/users/') ||
         url.includes('/admin/roles/') ||
         url.includes('/admin/permissions/') ||
-        url.includes('/admin/reference-data/')
+        url.includes('/admin/reference-data/') ||
+        url.includes('/admin/audit/')
       ) {
         return Promise.resolve(jsonResponse(200, []))
       }

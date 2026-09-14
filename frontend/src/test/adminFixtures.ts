@@ -1,4 +1,5 @@
 import type { AdminCompany } from '../types/adminCompany'
+import type { AdminAuditLog } from '../types/adminAudit'
 import type { AdminPermission } from '../types/adminPermission'
 import type { AdminRoleDetail, AdminRoleListItem } from '../types/adminRole'
 import type { AdminUser, AdminUserDetail } from '../types/adminUser'
@@ -39,6 +40,31 @@ export function adminCompany(overrides: Partial<AdminCompany> = {}): AdminCompan
     is_platform: false,
     created_at: '2026-09-01T10:00:00+00:00',
     updated_at: '2026-09-02T10:00:00+00:00',
+    ...overrides,
+  }
+}
+
+/** The actual shape returned by the backend `AdminAuditLogSerializer`. */
+export function adminAuditLog(
+  overrides: Partial<AdminAuditLog> = {},
+): AdminAuditLog {
+  return {
+    id: 1,
+    company_id: 1,
+    user_id: 1,
+    user_name: 'Ada Admin',
+    action: 'company.provision',
+    entity_type: 'company',
+    entity_id: 5,
+    entity_name: 'Acme',
+    target_company_id: 5,
+    target_company_name: 'Acme',
+    previous_values: null,
+    new_values: { target_company_id: 5, display_name: 'Acme' },
+    ip_address: '127.0.0.1',
+    user_agent: 'vitest',
+    request_id: null,
+    created_at: '2026-09-01T10:00:00+00:00',
     ...overrides,
   }
 }
