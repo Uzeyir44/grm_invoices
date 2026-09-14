@@ -1,5 +1,12 @@
 from django.urls import path
 
+from apps.system_admin.api.role_views import (
+    AdminPermissionListView,
+    AdminRoleDetailView,
+    AdminRoleListCreateView,
+    AdminRolePermissionDetailView,
+    AdminRolePermissionListCreateView,
+)
 from apps.system_admin.api.views import (
     AdminCompanyActivateView,
     AdminCompanyDeactivateView,
@@ -89,5 +96,31 @@ urlpatterns = [
         "users/<int:pk>/roles/<int:role_id>/",
         AdminUserRoleDetailView.as_view(),
         name="admin-user-role-detail",
+    ),
+    # Roles & permissions management (Phase 6).
+    path(
+        "permissions/",
+        AdminPermissionListView.as_view(),
+        name="admin-permission-list",
+    ),
+    path(
+        "roles/",
+        AdminRoleListCreateView.as_view(),
+        name="admin-role-list-create",
+    ),
+    path(
+        "roles/<int:pk>/",
+        AdminRoleDetailView.as_view(),
+        name="admin-role-detail",
+    ),
+    path(
+        "roles/<int:pk>/permissions/",
+        AdminRolePermissionListCreateView.as_view(),
+        name="admin-role-permission-list-create",
+    ),
+    path(
+        "roles/<int:pk>/permissions/<int:permission_id>/",
+        AdminRolePermissionDetailView.as_view(),
+        name="admin-role-permission-detail",
     ),
 ]

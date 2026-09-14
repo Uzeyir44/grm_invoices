@@ -13,6 +13,9 @@ import { AdminDashboardPage } from '../pages/admin/AdminDashboardPage'
 import { AdminLoginPage } from '../pages/admin/AdminLoginPage'
 import { AdminPermissionsPage } from '../pages/admin/AdminPermissionsPage'
 import { AdminReferenceDataPage } from '../pages/admin/AdminReferenceDataPage'
+import { AdminRoleCreatePage } from '../pages/admin/AdminRoleCreatePage'
+import { AdminRoleDetailPage } from '../pages/admin/AdminRoleDetailPage'
+import { AdminRoleEditPage } from '../pages/admin/AdminRoleEditPage'
 import { AdminRolesPage } from '../pages/admin/AdminRolesPage'
 import { AdminSettingsPage } from '../pages/admin/AdminSettingsPage'
 import { AdminUserDetailPage } from '../pages/admin/AdminUserDetailPage'
@@ -103,6 +106,9 @@ export function AppRouter() {
           <Route path="users/:userId" element={<AdminUserDetailPage />} />
           <Route path="users/:userId/edit" element={<AdminUserEditPage />} />
           <Route path="roles" element={<AdminRolesPage />} />
+          <Route path="roles/new" element={<AdminRoleCreatePage />} />
+          <Route path="roles/:roleId" element={<AdminRoleDetailPage />} />
+          <Route path="roles/:roleId/edit" element={<AdminRoleEditPage />} />
           <Route path="permissions" element={<AdminPermissionsPage />} />
           <Route path="reference-data" element={<AdminReferenceDataPage />} />
           <Route path="audit" element={<AdminAuditPage />} />

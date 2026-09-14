@@ -1,4 +1,6 @@
 import type { AdminCompany } from '../types/adminCompany'
+import type { AdminPermission } from '../types/adminPermission'
+import type { AdminRoleDetail, AdminRoleListItem } from '../types/adminRole'
 import type { AdminUser, AdminUserDetail } from '../types/adminUser'
 import type { SystemAdmin } from '../types/adminAuth'
 
@@ -37,6 +39,52 @@ export function adminCompany(overrides: Partial<AdminCompany> = {}): AdminCompan
     is_platform: false,
     created_at: '2026-09-01T10:00:00+00:00',
     updated_at: '2026-09-02T10:00:00+00:00',
+    ...overrides,
+  }
+}
+
+/** The actual shape returned by the backend `AdminPermissionSerializer`. */
+export function adminPermission(
+  overrides: Partial<AdminPermission> = {},
+): AdminPermission {
+  return {
+    id: 1,
+    code: 'clients.read',
+    description: 'View clients',
+    scope: 'tenant',
+    ...overrides,
+  }
+}
+
+/** The actual shape returned by the backend `AdminRoleListSerializer`. */
+export function adminRoleListItem(
+  overrides: Partial<AdminRoleListItem> = {},
+): AdminRoleListItem {
+  return {
+    id: 3,
+    name: 'Manager A',
+    company_id: 5,
+    company_name: 'Acme',
+    scope: 'tenant',
+    permission_count: 1,
+    created_at: '2026-09-01T10:00:00+00:00',
+    ...overrides,
+  }
+}
+
+/** The actual shape returned by the backend `AdminRoleDetailSerializer`. */
+export function adminRoleDetail(
+  overrides: Partial<AdminRoleDetail> = {},
+): AdminRoleDetail {
+  return {
+    id: 3,
+    name: 'Manager A',
+    company_id: 5,
+    company_name: 'Acme',
+    scope: 'tenant',
+    created_at: '2026-09-01T10:00:00+00:00',
+    permissions: [],
+    available_permissions: [],
     ...overrides,
   }
 }

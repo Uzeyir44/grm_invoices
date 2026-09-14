@@ -617,8 +617,11 @@ trigger the refresh flow.
 /admin/users            → user list (AdminRoute, inside AdminShell)
 /admin/users/:userId    → user detail (edit / activate / deactivate / roles)
 /admin/users/:userId/edit → edit user metadata
-/admin/roles            → placeholder section
-/admin/permissions      → placeholder section
+/admin/roles            → role list (AdminRoute, inside AdminShell)
+/admin/roles/new        → create a tenant role
+/admin/roles/:roleId    → role detail (permission assignment / edit)
+/admin/roles/:roleId/edit → edit role name
+/admin/permissions      → permission catalog (read-only)
 /admin/reference-data   → placeholder section
 /admin/audit            → placeholder section
 /admin/backups          → placeholder section
@@ -785,12 +788,71 @@ System Admin user API (`apps/system_admin/user_management.py` /
   from every user-management endpoint, so a System Admin account can never be
   edited, activated/deactivated, or have tenant roles assigned/removed here.
 
+### Admin roles & permissions (implemented)
+
+RBAC administration backed by `apps/system_admin/role_management.py` and
+`apps/system_admin/api/role_serializers.py`, gated by the `system.roles.manage`
+system permission:
+
+| Backend endpoint | Operation | API module fn |
+|---|---|---|
+| `GET /api/admin/permissions/` | permission catalog (`?scope=tenant\|system`) | `listAdminPermissions(params)` |
+| `GET /api/admin/roles/` | role list (`?scope=`, `?company_id=`) | `listAdminRoles(params)` |
+| `POST /api/admin/roles/` | create a **tenant** role | `createAdminRole(input)` |
+| `GET /api/admin/roles/:id/` | role detail (+ assignable permissions) | `getAdminRole(id)` |
+| `PATCH /api/admin/roles/:id/` | rename a tenant role | `updateAdminRole(id, input)` |
+| `GET /api/admin/roles/:id/permissions/` | list assigned permissions | `listAdminRolePermissions(id)` |
+| `POST /api/admin/roles/:id/permissions/` | assign a tenant permission | `assignAdminRolePermission(id, pid)` |
+| `DELETE /api/admin/roles/:id/permissions/:pid/` | remove a permission | `removeAdminRolePermission(id, pid)` |
+
+**Scope model (tenant vs system).** Roles and permissions carry an explicit
+`scope`:
+
+- **Tenant** roles (`scope=tenant`) — global templates (`company=NULL`) and
+  company-specific roles — are the ordinary CRM RBAC domain. They may only
+  receive **tenant-scoped** permissions. Company-specific roles are listed with
+  their company; global templates show "Global template".
+- **System** roles (`scope=system`) are the platform-administration domain. The
+  reserved `System Admin` role is **protected**: it is listed and its
+  permissions are shown read-only, but it cannot be renamed, deleted, or have
+  permissions mutated through this UI/API.
+
+The two scopes are never mixed. A tenant role cannot receive a system
+permission (rejected with a 400, and blocked by the database trigger
+`trg_role_permission_scope_match`), and system roles cannot be mutated.
+
+- **Permission catalog** (`/admin/permissions`, `AdminPermissionsPage`) — a
+  **read-only** list of the application-defined catalog (code, description,
+  scope) with a `scope` filter. There is no permission create/delete; the
+  System Admin manages *role → permission assignments*, not the capability
+  definitions.
+- **Role list** (`/admin/roles`, `AdminRolesPage`) — all roles with scope,
+  company (or "Global template" / "Platform (protected)"), and permission
+  count; filters by `scope` and `company_id` are kept in the URL.
+- **Create tenant role** (`/admin/roles/new`, `AdminRoleCreatePage`) — choose a
+  tenant company (the platform company is never offered) and a name. The
+  backend always creates a `scope=tenant` role; a client cannot request system
+  scope. Permissions are assigned afterwards on the detail page.
+- **Role detail** (`/admin/roles/:roleId`, `AdminRoleDetailPage`) — identity,
+  scope, company, creation date, and permissions. For tenant roles it offers
+  permission assignment (an **Add permission** picker limited to tenant
+  permissions) and removal. For system roles it shows a protected notice and
+  **no** mutation controls.
+- **Edit role** (`/admin/roles/:roleId/edit`, `AdminRoleEditPage`) — renames a
+  tenant role only. `scope` and `company` are immutable; system roles cannot be
+  edited.
+- **Platform company protection** — a tenant role can never be created for the
+  platform company, and a role's `company` can never be changed through the
+  API.
+- Frontend filtering (tenant-only roles/permissions, no platform company) is UX
+  only; the backend is authoritative and enforces every rule.
+
 ### Current status
 
-Companies and Users are implemented as above. The remaining Admin sections
-(Roles & Permissions, Permission Catalog, Reference Data, Audit & Security,
-Backups, Settings) are **placeholder pages** that state their functionality
-arrives in a later phase. There are no fabricated dashboard statistics.
+Companies, Users, and Roles & Permissions are implemented as above. The
+remaining Admin sections (Reference Data, Audit & Security, Backups, Settings)
+are **placeholder pages** that state their functionality arrives in a later
+phase. There are no fabricated dashboard statistics.
 
 ## Testing
 
