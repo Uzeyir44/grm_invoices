@@ -19,6 +19,10 @@ PLATFORM_COMPANY_DISPLAY_NAME = "GRM Platform"
 # Reserved global, system-scoped role.
 SYSTEM_ADMIN_ROLE_NAME = "System Admin"
 
+# Company-scoped role created for each newly provisioned tenant to grant its
+# initial administrator the tenant permission catalog.
+TENANT_ADMIN_ROLE_NAME = "Administrator"
+
 # Initial system permission catalog (seeded by migration
 # authentication.0009_seed_system_permissions). Kept in sync with that
 # migration; the migration is the source of truth for the database rows.

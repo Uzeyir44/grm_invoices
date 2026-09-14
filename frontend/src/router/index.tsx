@@ -6,6 +6,9 @@ import { AuthLayout } from '../components/layout/AuthLayout'
 import { AdminAuditPage } from '../pages/admin/AdminAuditPage'
 import { AdminBackupsPage } from '../pages/admin/AdminBackupsPage'
 import { AdminCompaniesPage } from '../pages/admin/AdminCompaniesPage'
+import { AdminCompanyCreatePage } from '../pages/admin/AdminCompanyCreatePage'
+import { AdminCompanyDetailPage } from '../pages/admin/AdminCompanyDetailPage'
+import { AdminCompanyEditPage } from '../pages/admin/AdminCompanyEditPage'
 import { AdminDashboardPage } from '../pages/admin/AdminDashboardPage'
 import { AdminLoginPage } from '../pages/admin/AdminLoginPage'
 import { AdminPermissionsPage } from '../pages/admin/AdminPermissionsPage'
@@ -85,6 +88,15 @@ export function AppRouter() {
           <Route index element={<Navigate to="/admin/dashboard" replace />} />
           <Route path="dashboard" element={<AdminDashboardPage />} />
           <Route path="companies" element={<AdminCompaniesPage />} />
+          <Route path="companies/new" element={<AdminCompanyCreatePage />} />
+          <Route
+            path="companies/:companyId"
+            element={<AdminCompanyDetailPage />}
+          />
+          <Route
+            path="companies/:companyId/edit"
+            element={<AdminCompanyEditPage />}
+          />
           <Route path="users" element={<AdminUsersPage />} />
           <Route path="roles" element={<AdminRolesPage />} />
           <Route path="permissions" element={<AdminPermissionsPage />} />

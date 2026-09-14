@@ -610,7 +610,10 @@ trigger the refresh flow.
 /admin/login            → System Admin sign-in (outside the admin guard)
 /admin                  → redirects to /admin/dashboard (AdminRoute)
 /admin/dashboard        → admin landing page (AdminRoute, inside AdminShell)
-/admin/companies        → placeholder section (AdminRoute, inside AdminShell)
+/admin/companies        → company list (AdminRoute, inside AdminShell)
+/admin/companies/new    → provision a company + its initial administrator
+/admin/companies/:companyId       → company detail (edit / activate / deactivate)
+/admin/companies/:companyId/edit  → edit company metadata
 /admin/users            → placeholder section
 /admin/roles            → placeholder section
 /admin/permissions      → placeholder section
@@ -696,12 +699,56 @@ Sections the Admin lacks a permission for are hidden from navigation, and their
 placeholder page shows a safe "no access" notice. This is UX only — the backend
 enforces authorization.
 
+### Admin company management (implemented)
+
+Company management is the first fully implemented Admin section. It is backed by
+the System Admin company API (`apps/system_admin/api/`) — entirely separate from
+the tenant company APIs and gated by the `system.companies.manage` system
+permission:
+
+| Backend endpoint | Operation | API module fn |
+|---|---|---|
+| `GET /api/admin/companies/` | global company list | `listAdminCompanies()` |
+| `GET /api/admin/companies/:id/` | company detail | `getAdminCompany(id)` |
+| `POST /api/admin/companies/provision/` | provision company + initial administrator | `provisionAdminCompany(input)` |
+| `PATCH /api/admin/companies/:id/` | update editable metadata | `updateAdminCompany(id, input)` |
+| `POST /api/admin/companies/:id/activate/` | set status `active` | `activateAdminCompany(id)` |
+| `POST /api/admin/companies/:id/deactivate/` | set status `suspended` | `deactivateAdminCompany(id)` |
+
+- **List** (`/admin/companies`, `AdminCompaniesPage`) — loading, empty, and
+  error/retry states; a responsive table with company / VOEN / status / type /
+  created columns and a link to each detail. Real API data only (no fabricated
+  counts). The **New company** action is hidden without
+  `system.companies.manage`.
+- **Provision** (`/admin/companies/new`, `AdminCompanyCreatePage`) —
+  `POST .../provision/` collects the new company's details plus its initial
+  administrator's email and password. Validation distinguishes field errors
+  (e.g. duplicate VOEN, weak password) from business/API failures. The initial
+  password is transient form state only — never persisted to storage, never put
+  in the URL, and the page navigates to the new company's detail on success.
+- **Detail** (`/admin/companies/:companyId`, `AdminCompanyDetailPage`) — shows
+  the real serializer fields and status badge, links to edit, and offers
+  **Activate** / **Deactivate** (deactivate requires an inline confirmation).
+  Status transitions are never inferred on the client — the backend response is
+  authoritative. The reserved platform company shows a note and offers no
+  management actions.
+- **Edit** (`/admin/companies/:companyId/edit`, `AdminCompanyEditPage`) —
+  `PATCH` form for the backend-approved editable fields (`legal_name`,
+  `display_name`, `voen`, `registration_number`, `default_language`,
+  `default_timezone`). `status` and `is_platform` are not editable here, and the
+  platform company cannot be edited.
+- **Provisioning is atomic** on the backend: the company, its company-scoped
+  administrator role (holding the tenant permission catalog), the initial user,
+  and the platform audit event are created in one transaction; a failure rolls
+  everything back. The operation never creates a second platform company or
+  assigns a system-scoped role.
+
 ### Current status
 
-Every Admin section is a **placeholder page** that states its functionality
-arrives in a later phase. There is no company/user/role/reference-data/backup
-CRUD, no admin dashboard statistics (nothing is fabricated), and no admin
-business API modules yet.
+Companies is implemented as above. The remaining Admin sections (Users, Roles &
+Permissions, Permission Catalog, Reference Data, Audit & Security, Backups,
+Settings) are **placeholder pages** that state their functionality arrives in a
+later phase. There are no fabricated dashboard statistics.
 
 ## Testing
 

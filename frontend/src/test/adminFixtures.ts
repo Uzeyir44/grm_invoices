@@ -1,3 +1,4 @@
+import type { AdminCompany } from '../types/adminCompany'
 import type { SystemAdmin } from '../types/adminAuth'
 
 export function jsonResponse(
@@ -20,6 +21,24 @@ export const ALL_SYSTEM_PERMISSIONS = [
   'system.backups.manage',
   'system.settings.manage',
 ] as const
+
+/** The actual shape returned by the backend `AdminCompanySerializer`. */
+export function adminCompany(overrides: Partial<AdminCompany> = {}): AdminCompany {
+  return {
+    id: 5,
+    legal_name: 'Acme LLC',
+    display_name: 'Acme',
+    voen: '1234567890',
+    registration_number: null,
+    status: 'active',
+    default_language: 'az',
+    default_timezone: 'Asia/Baku',
+    is_platform: false,
+    created_at: '2026-09-01T10:00:00+00:00',
+    updated_at: '2026-09-02T10:00:00+00:00',
+    ...overrides,
+  }
+}
 
 /** The actual shape returned by the backend `SystemAdminMeSerializer`. */
 export function adminMe(overrides: Partial<SystemAdmin> = {}): SystemAdmin {

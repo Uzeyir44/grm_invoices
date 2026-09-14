@@ -35,7 +35,14 @@ describe('Admin routing', () => {
 
   function authenticateAdmin(overrides: Parameters<typeof adminMe>[0] = {}) {
     setAdminAccessToken('admin-token')
-    fetchMock.mockResolvedValue(jsonResponse(200, adminMe(overrides)))
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      // The companies list is a real endpoint now; return an empty list.
+      if (url.includes('/admin/companies/')) {
+        return Promise.resolve(jsonResponse(200, []))
+      }
+      return Promise.resolve(jsonResponse(200, adminMe(overrides)))
+    })
   }
 
   it('renders the admin login page at /admin/login', async () => {
