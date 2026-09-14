@@ -121,6 +121,7 @@ INSTALLED_APPS = [
     "apps.generated_documents",
     "apps.audit_logs",
     "apps.database",
+    "apps.system_admin",
 ]
 
 # The project uses its own company-aware User model (apps.authentication.User).

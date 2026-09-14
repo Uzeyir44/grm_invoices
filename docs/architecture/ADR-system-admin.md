@@ -300,6 +300,13 @@ Example event: action `company.create`, entity_type `company`,
 entity_id `X.id`, `new_values = { "target_company_id": X.id, ... }`,
 `company = GRM Platform`.
 
+Phase 2 implementation: the helper `create_platform_audit_log(...)` in
+`apps/system_admin/audit.py` always attributes the event to the server-resolved
+platform company and records the administered tenant under the payload key
+`target_company_id` (in `new_values`). No new `AuditLog` columns are added. The
+actor must be a System Admin belonging to the platform company, and callers
+cannot supply the audit `company` at all.
+
 Option B (nullable audit `company`) and Option C (separate platform audit
 storage) are rejected as more invasive and as fragmenting the single append-only
 audit trail. If a first-class `actor_company_id` / `target_company_id` pair is
@@ -438,9 +445,12 @@ Negative / costs:
 These are implementation details, not architectural blockers (the five required
 questions are decided above):
 
-- The exact identification mechanism for the reserved platform company (a
-  reserved constant validated by tests vs an additive `Company.is_platform`
-  flag) — to be settled at Phase 1.
+- The exact identification mechanism for the reserved platform company was
+  settled in Phase 1 as an additive `Company.is_platform` flag with a partial
+  unique constraint (`uq_companies_single_platform`). The flag is used only for
+  idempotent provisioning and for the database rule that system roles may only
+  be assigned to platform-company users; it is **not** an authorization input
+  (authorization combines the platform token scope with the system role).
 - Whether a future phase adds explicit `actor_company_id` / `target_company_id`
   columns to `AuditLog` (Decision 7 leaves this open by design).
 - Whether System Admin accounts should be blocked from the company login

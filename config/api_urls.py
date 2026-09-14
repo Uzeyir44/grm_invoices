@@ -19,4 +19,5 @@ urlpatterns = [
     path("generated-documents/", include("apps.generated_documents.api.urls")),
     path("audit-logs/", include("apps.audit_logs.api.urls")),
     path("reference-data/", include("apps.reference_data.api.urls")),
+    path("admin/", include("apps.system_admin.api.urls")),
 ]

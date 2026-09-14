@@ -3,6 +3,23 @@ from django.db import models
 from django.db.models import Q
 
 
+class Scope(models.TextChoices):
+    """
+    RBAC authorization scope.
+
+    ``TENANT`` permissions/roles authorize a company user *within* their own
+    company (the existing behavior, and the default for every legacy row).
+    ``SYSTEM`` permissions/roles authorize a platform System Admin across
+    tenants. The two scopes are structurally separate: a role may only hold
+    permissions of its own scope (enforced in the database, see
+    ``apps/database/migrations/0004_scoped_rbac_constraints.py``) and a system
+    role may only be assigned to a platform-company user.
+    """
+
+    TENANT = "tenant", "Tenant"
+    SYSTEM = "system", "System"
+
+
 class UserManager(BaseUserManager):
     """
     NOTE: email is unique per-company, not globally — see the module-level
@@ -103,6 +120,15 @@ class Role(models.Model):
         blank=True,
     )
     name = models.CharField(max_length=100)
+    scope = models.CharField(
+        max_length=10,
+        choices=Scope.choices,
+        default=Scope.TENANT,
+        help_text=(
+            "Tenant roles grant permissions within one company; system roles "
+            "grant platform-wide permissions to System Admins."
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     permissions = models.ManyToManyField(
@@ -124,11 +150,21 @@ class Role(models.Model):
                 condition=Q(company__isnull=False),
                 name="uq_roles_company_name",
             ),
+            # A system-scoped role is platform-wide and must be global; only
+            # tenant roles may be company-specific.
+            models.CheckConstraint(
+                check=Q(scope="tenant") | Q(company__isnull=True),
+                name="ck_roles_system_scope_is_global",
+            ),
         ]
+
+    @property
+    def is_system(self):
+        return self.scope == Scope.SYSTEM
 
     def __str__(self):
         scope = "global" if self.company_id is None else f"company={self.company_id}"
-        return f"{self.name} ({scope})"
+        return f"{self.name} ({self.scope}/{scope})"
 
 
 class Permission(models.Model):
@@ -144,6 +180,15 @@ class Permission(models.Model):
         help_text="e.g. clients.delete",
     )
     description = models.CharField(max_length=255)
+    scope = models.CharField(
+        max_length=10,
+        choices=Scope.choices,
+        default=Scope.TENANT,
+        help_text=(
+            "Tenant permissions are grantable to company roles; system "
+            "permissions are grantable only to system roles."
+        ),
+    )
 
     class Meta:
         db_table = "permissions"
@@ -176,6 +221,26 @@ class RolePermission(models.Model):
                 name="uq_role_permissions_pair",
             ),
         ]
+
+    def clean(self):
+        """
+        A role may only hold permissions of its own scope.
+
+        This is the application-level guard; the database trigger
+        ``trg_role_permission_scope_match`` is the authoritative backstop and
+        also covers ORM paths (e.g. ``role.permissions.add()``) that do not run
+        model validation.
+        """
+        from django.core.exceptions import ValidationError
+
+        if self.role_id and self.permission_id:
+            role_scope = self.role.scope
+            permission_scope = self.permission.scope
+            if role_scope != permission_scope:
+                raise ValidationError(
+                    "A role and its permissions must share the same scope "
+                    f"(role={role_scope}, permission={permission_scope})."
+                )
 
 
 class UserRole(models.Model):

@@ -35,6 +35,18 @@ class Company(models.Model):
     default_language = models.CharField(max_length=2, default="az")
     default_timezone = models.CharField(max_length=64, default="Asia/Baku")
 
+    # Marks the single reserved internal "GRM Platform" company that is the
+    # account home for System Admin users (see
+    # docs/architecture/ADR-system-admin.md, Decision 2). It is NOT a tenant
+    # context; the platform company holds no tenant business data. The flag
+    # exists so provisioning is idempotent and so the database can require that
+    # system roles are only assigned to platform-company users. Authorization
+    # never keys off this flag alone.
+    is_platform = models.BooleanField(
+        default=False,
+        help_text="Reserved internal platform company for System Admins.",
+    )
+
     # default_currency_id intentionally omitted until the `currencies`
     # reference-data model exists — added via a follow-up migration then.
 
@@ -50,6 +62,12 @@ class Company(models.Model):
                 fields=["voen"],
                 condition=Q(voen__isnull=False, deleted_at__isnull=True),
                 name="uq_companies_voen_active",
+            ),
+            # At most one platform company may ever exist.
+            models.UniqueConstraint(
+                fields=["is_platform"],
+                condition=Q(is_platform=True),
+                name="uq_companies_single_platform",
             ),
         ]
         indexes = [
