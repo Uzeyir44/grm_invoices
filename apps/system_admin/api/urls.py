@@ -1,5 +1,20 @@
 from django.urls import path
 
+from apps.system_admin.api.reference_data_views import (
+    AdminAddressTypeDetailView,
+    AdminAddressTypeListCreateView,
+    AdminBankActivateView,
+    AdminBankDeactivateView,
+    AdminBankDetailView,
+    AdminBankListCreateView,
+    AdminCurrencyDetailView,
+    AdminCurrencyListCreateView,
+    AdminDocumentTypeDetailView,
+    AdminDocumentTypeListCreateView,
+    AdminExchangeRateListView,
+    AdminVatRateDetailView,
+    AdminVatRateListCreateView,
+)
 from apps.system_admin.api.role_views import (
     AdminPermissionListView,
     AdminRoleDetailView,
@@ -122,5 +137,71 @@ urlpatterns = [
         "roles/<int:pk>/permissions/<int:permission_id>/",
         AdminRolePermissionDetailView.as_view(),
         name="admin-role-permission-detail",
+    ),
+    # Reference data administration (Phase 7).
+    path(
+        "reference-data/currencies/",
+        AdminCurrencyListCreateView.as_view(),
+        name="admin-reference-currency-list-create",
+    ),
+    path(
+        "reference-data/currencies/<int:pk>/",
+        AdminCurrencyDetailView.as_view(),
+        name="admin-reference-currency-detail",
+    ),
+    path(
+        "reference-data/document-types/",
+        AdminDocumentTypeListCreateView.as_view(),
+        name="admin-reference-document-type-list-create",
+    ),
+    path(
+        "reference-data/document-types/<int:pk>/",
+        AdminDocumentTypeDetailView.as_view(),
+        name="admin-reference-document-type-detail",
+    ),
+    path(
+        "reference-data/address-types/",
+        AdminAddressTypeListCreateView.as_view(),
+        name="admin-reference-address-type-list-create",
+    ),
+    path(
+        "reference-data/address-types/<int:pk>/",
+        AdminAddressTypeDetailView.as_view(),
+        name="admin-reference-address-type-detail",
+    ),
+    path(
+        "reference-data/vat-rates/",
+        AdminVatRateListCreateView.as_view(),
+        name="admin-reference-vat-rate-list-create",
+    ),
+    path(
+        "reference-data/vat-rates/<int:pk>/",
+        AdminVatRateDetailView.as_view(),
+        name="admin-reference-vat-rate-detail",
+    ),
+    path(
+        "reference-data/banks/",
+        AdminBankListCreateView.as_view(),
+        name="admin-reference-bank-list-create",
+    ),
+    path(
+        "reference-data/banks/<int:pk>/",
+        AdminBankDetailView.as_view(),
+        name="admin-reference-bank-detail",
+    ),
+    path(
+        "reference-data/banks/<int:pk>/activate/",
+        AdminBankActivateView.as_view(),
+        name="admin-reference-bank-activate",
+    ),
+    path(
+        "reference-data/banks/<int:pk>/deactivate/",
+        AdminBankDeactivateView.as_view(),
+        name="admin-reference-bank-deactivate",
+    ),
+    path(
+        "reference-data/exchange-rates/",
+        AdminExchangeRateListView.as_view(),
+        name="admin-reference-exchange-rate-list",
     ),
 ]

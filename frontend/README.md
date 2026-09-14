@@ -622,7 +622,7 @@ trigger the refresh flow.
 /admin/roles/:roleId    → role detail (permission assignment / edit)
 /admin/roles/:roleId/edit → edit role name
 /admin/permissions      → permission catalog (read-only)
-/admin/reference-data   → placeholder section
+/admin/reference-data   → reference data administration (AdminRoute, inside AdminShell)
 /admin/audit            → placeholder section
 /admin/backups          → placeholder section
 /admin/settings         → placeholder section
@@ -847,12 +847,50 @@ permission (rejected with a 400, and blocked by the database trigger
 - Frontend filtering (tenant-only roles/permissions, no platform company) is UX
   only; the backend is authoritative and enforces every rule.
 
+### Admin reference data (implemented)
+
+Global reference-data administration at `/admin/reference-data`, backed by
+`apps/system_admin/api/reference_data_views.py` and gated by the
+`system.reference.manage` system permission:
+
+| Backend endpoint | Operations | API module fn |
+|---|---|---|
+| `/api/admin/reference-data/currencies/` (`:id/`) | list, create, update, delete | `list/create/update/deleteAdminCurrency` |
+| `/api/admin/reference-data/document-types/` (`:id/`) | list, create, update, delete | `list/create/update/deleteAdminDocumentType` |
+| `/api/admin/reference-data/address-types/` (`:id/`) | list, create, update, delete | `list/create/update/deleteAdminAddressType` |
+| `/api/admin/reference-data/vat-rates/` (`:id/`) | list, create, update, delete | `list/create/update/deleteAdminVatRate` |
+| `/api/admin/reference-data/banks/` (`:id/`) | list, create, update | `list/create/updateAdminBank` |
+| `/api/admin/reference-data/banks/:id/activate/`, `:id/deactivate/` | activate/deactivate | `activate/deactivateAdminBank` |
+| `/api/admin/reference-data/exchange-rates/` | list only (read-only) | `listAdminExchangeRates` |
+
+- **Global, not tenant-owned.** Reference data carries no `company_id`; the page
+  never shows a company selector. It is shared by every tenant and is not
+  editable by company users.
+- **Catalogs** are shown as tabs: Currencies, Document Types, Address Types, VAT
+  Rates, Banks, Exchange Rates. Each has loading, empty, error/retry, and
+  success/validation feedback.
+- **Currencies / Document Types / Address Types** — create/edit/delete (delete
+  requires an inline confirmation). Seeded records that are referenced by
+  business data are protected: the backend returns a 400 ("in use") rather than
+  deleting.
+- **VAT Rates** — create/edit/delete. Validity is a half-open date range (leave
+  *Valid to* empty for a still-effective rate). Overlapping periods for the same
+  name are rejected by the backend (serializer + PostgreSQL
+  `no_overlapping_vat_periods` exclusion constraint); the UI only displays the
+  error — it does not re-implement the rule.
+- **Banks** — create/edit and **activate/deactivate** (the existing `is_active`
+  lifecycle). There is deliberately **no delete** because client bank accounts
+  reference banks with `PROTECT`; `is_active` is not editable through PATCH.
+- **Exchange Rates** — a read-only shared feed (no mutation controls).
+- Frontend catalogs and operations mirror the backend exactly; the backend
+  remains authoritative.
+
 ### Current status
 
-Companies, Users, and Roles & Permissions are implemented as above. The
-remaining Admin sections (Reference Data, Audit & Security, Backups, Settings)
-are **placeholder pages** that state their functionality arrives in a later
-phase. There are no fabricated dashboard statistics.
+Companies, Users, Roles & Permissions, and Reference Data are implemented as
+above. The remaining Admin sections (Audit & Security, Backups, Settings) are
+**placeholder pages** that state their functionality arrives in a later phase.
+There are no fabricated dashboard statistics.
 
 ## Testing
 

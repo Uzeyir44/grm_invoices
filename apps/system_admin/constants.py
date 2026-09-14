@@ -37,3 +37,7 @@ SYSTEM_PERMISSIONS = (
 )
 
 SYSTEM_PERMISSION_CODES = tuple(code for code, _ in SYSTEM_PERMISSIONS)
+
+# System permission guarding the /api/admin/reference-data/ administration API
+# (Phase 7). Reference data is global, not tenant-owned.
+REFERENCE_MANAGE_PERMISSION = "system.reference.manage"
