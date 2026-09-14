@@ -624,7 +624,7 @@ trigger the refresh flow.
 /admin/permissions      → permission catalog (read-only)
 /admin/reference-data   → reference data administration (AdminRoute, inside AdminShell)
 /admin/audit            → platform audit & security (read-only, inside AdminShell)
-/admin/backups          → placeholder section
+/admin/backups          → backup administration (inside AdminShell)
 /admin/settings         → placeholder section
 *              → not found
 ```
@@ -924,11 +924,65 @@ system permission:
 - The tenant audit UI (`/audit-logs`, `audit_logs.read`) is separate and
   unchanged; the two audit contexts are deliberately not merged.
 
+### Admin backups (implemented)
+
+`/admin/backups` is the System Admin backup administration surface. It is
+backed by `apps/system_admin` (Phase 9) and gated by the `system.backups.manage`
+system permission. Backups are **system-level**: they contain the entire CRM
+dataset, are never company-scoped, and are never accessible to tenant users.
+
+Backups are **application-managed on this server** — there is no provider
+(e.g. Render/Railway/AWS) integration and no managed-object-storage backup. The
+backend produces **real artifacts** and reports capability honestly; it never
+fabricates a backup that does not exist.
+
+| Backend endpoint | Operation | API module fn |
+|---|---|---|
+| `GET /api/admin/backups/capability/` | honest per-type capability report | `getAdminBackupCapabilities()` |
+| `GET /api/admin/backups/` | paginated backup list (newest first) | `listAdminBackups(params)` |
+| `POST /api/admin/backups/` `{ backup_type }` | create a database or media backup | `createAdminBackup(type)` |
+| `GET /api/admin/backups/:id/` | one backup record | `getAdminBackup(id)` |
+| `GET /api/admin/backups/:id/download/` | stream the real artifact | `downloadAdminBackup(backup)` |
+| `POST /api/admin/backups/:id/verify/` | SHA-256 integrity check on demand | `verifyAdminBackup(id)` |
+| `DELETE /api/admin/backups/:id/` | permanently delete (confirm first) | `deleteAdminBackup(id)` |
+
+- **Capability is reported, never assumed.** `pg_dump` is resolved from server
+  configuration (`PG_DUMP_PATH`, falling back to `PATH`). When no binary is
+  configured, the database capability reports `available: false` with a reason
+  and the create button is disabled — the UI never pretends a database backup
+  is possible.
+- **Database backups** run the configured `pg_dump` in **custom format**
+  (`-Fc`) — a compressed, single-file, consistent PostgreSQL snapshot that is
+  restorable with `pg_restore`. The database password is passed only through
+  the subprocess `PGPASSWORD` environment variable (never argv/logs/API).
+- **Media backups** archive the explicit scope of `MEDIA_ROOT` (document
+  templates + generated DOCX/PDF files) into a ZIP. The project root or machine
+  is never archived, and an empty media tree fails honestly.
+- **Storage.** Artifacts live in the server-configured `BACKUP_ROOT` (default
+  `<project>/backup_storage`), deliberately **outside** `MEDIA_ROOT` and never
+  web-served. The API exposes only the logical label `"backup-storage"` — no
+  filesystem paths, no credentials.
+- **Integrity.** Every completed artifact records its size and a SHA-256
+  checksum. Verify re-checks the artifact on demand (exists + non-zero size +
+  checksum match). A checksum proves integrity, **not** successful restoration.
+- **Deletion** requires an explicit confirmation dialog (identifier, timestamp,
+  size, permanent-warning) and is never one-click. The backend removes the
+  artifact before the record and refuses to delete pending/running backups.
+- **Downloads** stream through the authenticated endpoint (blob +
+  `Content-Disposition` filename); no raw URL, no localStorage persistence.
+- **Audit.** Every mutation (create request, completed/failed outcome,
+  download, verify, delete) is written to the platform audit trail
+  (`backup.*` events) through `create_platform_audit_log`, attributed to the
+  platform company with no `target_company_id`.
+- **Not supported (and not shown):** restore, automatic/ scheduled backups
+  (no job infra; none is added), retention automation (no policy exists; old
+  backups are never auto-deleted), and any cloud/provider backup integration.
+
 ### Current status
 
-Companies, Users, Roles & Permissions, Reference Data, and Audit & Security are
-implemented as above. The remaining Admin sections (Backups, Settings) are
-**placeholder pages** that state their functionality arrives in a later phase.
+Companies, Users, Roles & Permissions, Reference Data, Audit & Security, and
+Backups are implemented as above. The remaining Admin section (Settings) is a
+**placeholder page** that states its functionality arrives in a later phase.
 There are no fabricated dashboard statistics.
 
 ## Testing

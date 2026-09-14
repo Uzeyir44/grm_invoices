@@ -11,6 +11,9 @@ db.sqlite3
 staticfiles/
 media/
 
+# System Admin backup artifacts (Phase 9) — never committed, never web-served.
+backup_storage/
+
 # Environment & secrets
 .env
 

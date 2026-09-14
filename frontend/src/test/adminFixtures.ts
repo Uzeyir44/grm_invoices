@@ -1,5 +1,6 @@
 import type { AdminCompany } from '../types/adminCompany'
 import type { AdminAuditLog } from '../types/adminAudit'
+import type { AdminBackup, BackupCapabilities } from '../types/adminBackup'
 import type { AdminPermission } from '../types/adminPermission'
 import type { AdminRoleDetail, AdminRoleListItem } from '../types/adminRole'
 import type { AdminUser, AdminUserDetail } from '../types/adminUser'
@@ -78,6 +79,40 @@ export function adminPermission(
     code: 'clients.read',
     description: 'View clients',
     scope: 'tenant',
+    ...overrides,
+  }
+}
+
+/** The actual shape returned by the backend `AdminBackupSerializer`. */
+export function adminBackup(
+  overrides: Partial<AdminBackup> = {},
+): AdminBackup {
+  return {
+    id: 7,
+    backup_type: 'database',
+    status: 'completed',
+    created_at: '2026-09-14T08:00:00+00:00',
+    updated_at: '2026-09-14T08:00:05+00:00',
+    completed_at: '2026-09-14T08:00:05+00:00',
+    file_name: 'grm-backup-database-20260914-080000-a1b2c3d4.dump',
+    file_size: 4096,
+    checksum_sha256:
+      '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+    storage: 'backup-storage',
+    error_message: '',
+    created_by_id: 1,
+    created_by_name: 'Ada Admin',
+    ...overrides,
+  }
+}
+
+/** The actual shape returned by `GET /api/admin/backups/capability/`. */
+export function adminBackupCapabilities(
+  overrides: Partial<BackupCapabilities> = {},
+): BackupCapabilities {
+  return {
+    database: { available: true, reason: 'pg_dump is configured on this server.' },
+    media: { available: true, reason: 'Media files are stored on the local filesystem.' },
     ...overrides,
   }
 }

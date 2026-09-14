@@ -1,6 +1,13 @@
 from django.urls import path
 
 from apps.system_admin.api.audit_views import AdminAuditLogListView
+from apps.system_admin.api.backup_views import (
+    AdminBackupCapabilityView,
+    AdminBackupDetailView,
+    AdminBackupDownloadView,
+    AdminBackupListView,
+    AdminBackupVerifyView,
+)
 from apps.system_admin.api.reference_data_views import (
     AdminAddressTypeDetailView,
     AdminAddressTypeListCreateView,
@@ -210,5 +217,31 @@ urlpatterns = [
         "audit/",
         AdminAuditLogListView.as_view(),
         name="admin-audit-log-list",
+    ),
+    # Backups (Phase 9).
+    path(
+        "backups/capability/",
+        AdminBackupCapabilityView.as_view(),
+        name="admin-backup-capability",
+    ),
+    path(
+        "backups/",
+        AdminBackupListView.as_view(),
+        name="admin-backup-list-create",
+    ),
+    path(
+        "backups/<int:pk>/",
+        AdminBackupDetailView.as_view(),
+        name="admin-backup-detail",
+    ),
+    path(
+        "backups/<int:pk>/download/",
+        AdminBackupDownloadView.as_view(),
+        name="admin-backup-download",
+    ),
+    path(
+        "backups/<int:pk>/verify/",
+        AdminBackupVerifyView.as_view(),
+        name="admin-backup-verify",
     ),
 ]

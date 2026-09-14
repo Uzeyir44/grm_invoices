@@ -256,6 +256,22 @@ LIBREOFFICE_PATH = env("LIBREOFFICE_PATH", default="")
 # Maximum seconds a single DOCX -> PDF conversion may take before failing.
 PDF_CONVERSION_TIMEOUT = int(env("PDF_CONVERSION_TIMEOUT", 120))
 
+# System Admin backups (Phase 9).
+#
+# Application-triggered PostgreSQL dumps require a pg_dump binary. The
+# executable path is server configuration, never client input: leave
+# PG_DUMP_PATH empty to auto-discover via PATH (shutil.which), or pin an
+# explicit path (e.g. the PostgreSQL bin directory on the host). The backup
+# capability is reported honestly — when no binary can be resolved, database
+# backups are reported as unavailable instead of pretending to run.
+PG_DUMP_PATH = env("PG_DUMP_PATH", default="")
+# Directory that stores backup artifacts. It is deliberately OUTSIDE MEDIA_ROOT
+# so backups are never reachable through any media/static/public URL. It must
+# never be mounted at a web-served path.
+BACKUP_ROOT = Path(env("BACKUP_ROOT", default=str(BASE_DIR / "backup_storage")))
+# Maximum seconds a single backup creation may take before it is marked failed.
+BACKUP_CREATION_TIMEOUT = int(env("BACKUP_CREATION_TIMEOUT", 300))
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
