@@ -1,9 +1,20 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 
+import { AdminShell } from '../components/layout/AdminShell'
 import { AppShell } from '../components/layout/AppShell'
 import { AuthLayout } from '../components/layout/AuthLayout'
-import { LoginPage } from '../pages/auth/LoginPage'
+import { AdminAuditPage } from '../pages/admin/AdminAuditPage'
+import { AdminBackupsPage } from '../pages/admin/AdminBackupsPage'
+import { AdminCompaniesPage } from '../pages/admin/AdminCompaniesPage'
+import { AdminDashboardPage } from '../pages/admin/AdminDashboardPage'
+import { AdminLoginPage } from '../pages/admin/AdminLoginPage'
+import { AdminPermissionsPage } from '../pages/admin/AdminPermissionsPage'
+import { AdminReferenceDataPage } from '../pages/admin/AdminReferenceDataPage'
+import { AdminRolesPage } from '../pages/admin/AdminRolesPage'
+import { AdminSettingsPage } from '../pages/admin/AdminSettingsPage'
+import { AdminUsersPage } from '../pages/admin/AdminUsersPage'
 import { AuditLogsIndexPage } from '../pages/auditLogs/AuditLogsIndexPage'
+import { LoginPage } from '../pages/auth/LoginPage'
 import { ClientCreatePage } from '../pages/clients/ClientCreatePage'
 import { ClientDetailPage } from '../pages/clients/ClientDetailPage'
 import { ClientEditPage } from '../pages/clients/ClientEditPage'
@@ -18,16 +29,19 @@ import { TemplateDetailPage } from '../pages/templates/TemplateDetailPage'
 import { TemplateEditPage } from '../pages/templates/TemplateEditPage'
 import { TemplateVersionDetailPage } from '../pages/templates/TemplateVersionDetailPage'
 import { TemplatesIndexPage } from '../pages/templates/TemplatesIndexPage'
+import { AdminRoute } from './AdminRoute'
 import { ProtectedRoute } from './ProtectedRoute'
+import { RedirectIfAdminAuthenticated } from './RedirectIfAdminAuthenticated'
 import { RedirectIfAuthenticated } from './RedirectIfAuthenticated'
 
 /**
- * Application route tree.
+ * Application route tree — two independent surfaces:
  *
- * * The application area is wrapped in {@link ProtectedRoute} and rendered
- *   through {@link AppShell}.
- * * `/login` is signed-out-only; authenticated users go straight to the
- *   dashboard.
+ * * The company CRM: wrapped in {@link ProtectedRoute} and rendered through
+ *   {@link AppShell}; `/login` is signed-out-only.
+ * * The System Admin panel: `/admin/login` is signed-out-only and `/admin/*` is
+ *   wrapped in {@link AdminRoute} and rendered through {@link AdminShell}. The
+ *   two surfaces use separate auth contexts and token storage.
  */
 export function AppRouter() {
   return (
@@ -54,6 +68,33 @@ export function AppRouter() {
           <Route path="audit-logs" element={<AuditLogsIndexPage />} />
         </Route>
       </Route>
+
+      {/* System Admin surface */}
+      <Route path="admin/login" element={<AuthLayout />}>
+        <Route
+          index
+          element={
+            <RedirectIfAdminAuthenticated>
+              <AdminLoginPage />
+            </RedirectIfAdminAuthenticated>
+          }
+        />
+      </Route>
+      <Route path="admin" element={<AdminRoute />}>
+        <Route element={<AdminShell />}>
+          <Route index element={<Navigate to="/admin/dashboard" replace />} />
+          <Route path="dashboard" element={<AdminDashboardPage />} />
+          <Route path="companies" element={<AdminCompaniesPage />} />
+          <Route path="users" element={<AdminUsersPage />} />
+          <Route path="roles" element={<AdminRolesPage />} />
+          <Route path="permissions" element={<AdminPermissionsPage />} />
+          <Route path="reference-data" element={<AdminReferenceDataPage />} />
+          <Route path="audit" element={<AdminAuditPage />} />
+          <Route path="backups" element={<AdminBackupsPage />} />
+          <Route path="settings" element={<AdminSettingsPage />} />
+        </Route>
+      </Route>
+
       <Route path="login" element={<AuthLayout />}>
         <Route
           index

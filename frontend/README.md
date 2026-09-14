@@ -43,6 +43,9 @@ Implemented so far:
   detail (with read-only nested data), edit, and soft-delete confirmation.
 - **Application shell + dashboard** (Phase 3): authenticated shell (responsive
   sidebar, header, sign-out), real-data dashboard.
+- **System Admin shell** (Admin Phase 3): a separate `/admin` surface with its
+  own login, auth context, token storage, route guard, and permission-aware
+  navigation. Placeholder section pages only — no admin CRUD yet.
 - **Authentication vertical slice** (Phase 2): login, token storage, `/me`
   initialization, protected routes, automatic access-token refresh, logout.
 - **Technical foundation** (Phase 1): routing, Tailwind, the generic API
@@ -603,11 +606,102 @@ trigger the refresh flow.
 /documents/new → create generated document (protected, inside AppShell)
 /documents/:documentId → generated document detail (protected, inside AppShell)
 /audit-logs    → audit log list (protected, inside AppShell)
+
+/admin/login            → System Admin sign-in (outside the admin guard)
+/admin                  → redirects to /admin/dashboard (AdminRoute)
+/admin/dashboard        → admin landing page (AdminRoute, inside AdminShell)
+/admin/companies        → placeholder section (AdminRoute, inside AdminShell)
+/admin/users            → placeholder section
+/admin/roles            → placeholder section
+/admin/permissions      → placeholder section
+/admin/reference-data   → placeholder section
+/admin/audit            → placeholder section
+/admin/backups          → placeholder section
+/admin/settings         → placeholder section
 *              → not found
 ```
 
 Route protection is UX-only; the Django backend remains the authoritative
-authorization and tenant-isolation boundary.
+authorization and tenant-isolation boundary. The company CRM and the System
+Admin panel are **independent surfaces**: separate auth contexts, separate
+token storage, and separate route guards.
+
+## System Admin panel
+
+The System Admin panel is a separate frontend surface under `/admin`, backed by
+the Django admin API (`apps/system_admin`). It is additive: the company
+`AuthContext`, `ProtectedRoute`, `/login`, and company token storage are
+untouched.
+
+### Backend admin API dependency
+
+All Admin requests go through `/api/admin/` (see
+`docs/architecture/ADR-system-admin.md`):
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/admin/authentication/token/` | `{ email, password }` → `{ access, refresh }` (no company id) |
+| `POST /api/admin/authentication/token/refresh/` | `{ refresh }` → `{ access }` |
+| `GET /api/admin/authentication/me/` | Admin identity + `scope` + system `permissions` |
+
+The backend is authoritative: `/admin/*` requires `IsSystemAdmin` (a valid
+`scope=system_admin` token plus a system-scoped RBAC role), and every future
+admin endpoint will additionally require a specific `system.*` permission. The
+frontend only mirrors this for UX.
+
+### Admin authentication (separate from company auth)
+
+- `AdminAuthProvider` (`src/contexts/AdminAuthContext.tsx`, context in
+  `admin-auth-context.ts`) exposes `status`, `admin`, `permissions`,
+  `hasPermission(code)`, `login`, `logout`.
+- It bootstraps from `GET /api/admin/authentication/me/` using the **Admin**
+  access token; a company token cannot initialize it.
+- Admin tokens are stored under their own keys
+  (`src/utils/adminAuthStorage.ts`: `grm_crm.admin_access_token`,
+  `grm_crm.admin_refresh_token`) — distinct from the company keys, so the two
+  sessions can never overwrite one another. Only tokens are persisted; identity
+  and permissions are re-fetched from `/me`.
+- `adminApiClient` (`src/api/adminClient.ts`) targets `/api/admin/`, attaches
+  only the Admin bearer token, and performs a single-flight Admin refresh on
+  401 (retry once), then clears Admin tokens and notifies the provider. It
+  shares the typed `ApiError` behavior with the company client but never falls
+  back to company auth.
+- `AdminRoute` (`src/router/AdminRoute.tsx`) guards `/admin/*`; unauthenticated
+  visitors (including company-authenticated users) go to `/admin/login`.
+  `RedirectIfAdminAuthenticated` sends an authenticated Admin from
+  `/admin/login` to `/admin/dashboard`.
+- Admin logout clears only the Admin session; company logout likewise never
+  touches the Admin session.
+
+### Admin layout and permission-aware navigation
+
+`AdminShell` (`src/components/layout/AdminShell.tsx`) provides the responsive
+sidebar/overlay, a header with the Admin identity, and a sign-out action,
+mirroring `AppShell`. Navigation is filtered by the Admin's actual system
+permissions:
+
+| Section | Route | Required system permission |
+|---|---|---|
+| Dashboard | `/admin/dashboard` | — |
+| Companies | `/admin/companies` | `system.companies.manage` |
+| Users | `/admin/users` | `system.users.manage` |
+| Roles & Permissions | `/admin/roles` | `system.roles.manage` |
+| Permission Catalog | `/admin/permissions` | `system.roles.manage` |
+| Reference Data | `/admin/reference-data` | `system.reference.manage` |
+| Audit & Security | `/admin/audit` | `system.audit.read` |
+| Backups | `/admin/backups` | `system.backups.manage` |
+| Settings | `/admin/settings` | `system.settings.manage` |
+
+Sections the Admin lacks a permission for are hidden from navigation, and their
+placeholder page shows a safe "no access" notice. This is UX only — the backend
+enforces authorization.
+
+### Current status
+
+Every Admin section is a **placeholder page** that states its functionality
+arrives in a later phase. There is no company/user/role/reference-data/backup
+CRUD, no admin dashboard statistics (nothing is fabricated), and no admin
+business API modules yet.
 
 ## Testing
 

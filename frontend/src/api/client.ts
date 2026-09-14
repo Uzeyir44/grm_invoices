@@ -33,7 +33,12 @@ function resolveBaseUrl(): string {
   return (configured ?? DEFAULT_BASE_URL).replace(/\/+$/, '')
 }
 
-const BASE_URL = resolveBaseUrl()
+/**
+ * Resolved API base URL (defaults to `/api`). Exported so the System Admin
+ * client can target `/api/admin/...` with the same configuration without
+ * duplicating URL resolution.
+ */
+export const BASE_URL = resolveBaseUrl()
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
@@ -89,7 +94,7 @@ function firstFieldMessage(fieldErrors: ApiFieldErrors): string | undefined {
   return undefined
 }
 
-async function toApiError(response: Response): Promise<ApiError> {
+export async function toApiError(response: Response): Promise<ApiError> {
   const text = await response.text().catch(() => '')
   let payload: ApiErrorPayload | null = null
   try {
@@ -119,7 +124,7 @@ async function toApiError(response: Response): Promise<ApiError> {
   })
 }
 
-async function parseSuccess<T>(response: Response): Promise<T> {
+export async function parseSuccess<T>(response: Response): Promise<T> {
   const text = await response.text()
   if (response.status === 204 || text.length === 0) {
     return undefined as T
