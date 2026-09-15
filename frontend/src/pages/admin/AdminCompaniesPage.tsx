@@ -109,6 +109,9 @@ export function AdminCompaniesPage() {
                 <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                   <tr>
                     <th scope="col" className="px-4 py-2 font-medium">
+                      ID
+                    </th>
+                    <th scope="col" className="px-4 py-2 font-medium">
                       Company
                     </th>
                     <th scope="col" className="px-4 py-2 font-medium">
@@ -128,6 +131,9 @@ export function AdminCompaniesPage() {
                 <tbody className="divide-y divide-slate-100">
                   {companies.map((company) => (
                     <tr key={company.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 font-mono text-xs text-slate-600">
+                        {company.id}
+                      </td>
                       <td className="px-4 py-3">
                         <Link
                           to={`/admin/companies/${company.id}`}

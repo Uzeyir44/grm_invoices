@@ -3,6 +3,8 @@
  * `apps/system_admin/api/user_serializers.py`:
  *
  *   * `GET    /api/admin/users/`                       → `AdminUser[]`
+ *   * `POST   /api/admin/users/`                       → `AdminUserDetail`
+ *   * `GET    /api/admin/users/company-choices/`       → `AdminUserCompanyChoice[]`
  *   * `GET    /api/admin/users/:id/`                   → `AdminUserDetail`
  *   * `PATCH  /api/admin/users/:id/`                   → `AdminUserDetail`
  *   * `POST   /api/admin/users/:id/activate/`          → `AdminUserDetail`
@@ -45,6 +47,22 @@ export interface AdminUser {
 /** Detail additionally exposes the company's assignable tenant roles. */
 export interface AdminUserDetail extends AdminUser {
   company_roles: AdminUserRoleRef[]
+}
+
+export interface AdminUserCompanyChoice {
+  id: number
+  legal_name: string
+  display_name: string
+  roles: AdminUserRoleRef[]
+}
+
+export interface CreateUserInput {
+  company_id: number
+  email: string
+  first_name: string
+  last_name: string
+  password: string
+  role_ids: number[]
 }
 
 /** Body for `PATCH /api/admin/users/:id/` (admin-editable fields only). */

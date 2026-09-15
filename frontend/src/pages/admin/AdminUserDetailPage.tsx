@@ -73,7 +73,10 @@ export function AdminUserDetailPage() {
   const [rolePending, setRolePending] = useState(false)
 
   const updated = Boolean(
-    (location.state as { userUpdated?: boolean } | null)?.userUpdated,
+    (
+      location.state as { userUpdated?: boolean; userCreated?: boolean } | null
+    )?.userUpdated ||
+      (location.state as { userCreated?: boolean } | null)?.userCreated,
   )
 
   useEffect(() => {
@@ -225,7 +228,11 @@ export function AdminUserDetailPage() {
             role="status"
             className="rounded-md bg-emerald-50 px-4 py-3 text-sm text-emerald-800"
           >
-            User updated.
+            {(
+              location.state as { userCreated?: boolean } | null
+            )?.userCreated
+              ? 'User created.'
+              : 'User updated.'}
           </p>
         ) : null}
 
@@ -245,12 +252,18 @@ export function AdminUserDetailPage() {
 
         <dl className="grid gap-x-8 gap-y-3 rounded-lg border border-slate-200 bg-white p-6 text-sm sm:grid-cols-2">
           <div>
+            <dt className="text-slate-500">User ID</dt>
+            <dd className="font-mono text-slate-900">{user.id}</dd>
+          </div>
+          <div>
             <dt className="text-slate-500">Email</dt>
             <dd className="break-words text-slate-900">{user.email}</dd>
           </div>
           <div>
             <dt className="text-slate-500">Company</dt>
-            <dd className="break-words text-slate-900">{user.company_name}</dd>
+            <dd className="break-words text-slate-900">
+              {user.company_name} <span className="font-mono text-xs">(ID {user.company_id})</span>
+            </dd>
           </div>
           <div>
             <dt className="text-slate-500">First name</dt>

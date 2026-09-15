@@ -3,6 +3,8 @@ import type {
   AdminUser,
   AdminUserDetail,
   AdminUserRole,
+  AdminUserCompanyChoice,
+  CreateUserInput,
   UpdateUserInput,
 } from '../types/adminUser'
 
@@ -17,6 +19,16 @@ import type {
 
 export function listAdminUsers(): Promise<AdminUser[]> {
   return adminApiClient.get<AdminUser[]>('/admin/users/')
+}
+
+export function listAdminUserCompanyChoices(): Promise<AdminUserCompanyChoice[]> {
+  return adminApiClient.get<AdminUserCompanyChoice[]>(
+    '/admin/users/company-choices/',
+  )
+}
+
+export function createAdminUser(input: CreateUserInput): Promise<AdminUserDetail> {
+  return adminApiClient.post<AdminUserDetail>('/admin/users/', input)
 }
 
 export function getAdminUser(id: number): Promise<AdminUserDetail> {

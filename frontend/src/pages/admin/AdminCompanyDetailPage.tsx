@@ -197,6 +197,10 @@ export function AdminCompanyDetailPage() {
 
         <dl className="grid gap-x-8 gap-y-3 rounded-lg border border-slate-200 bg-white p-6 text-sm sm:grid-cols-2">
           <div>
+            <dt className="text-slate-500">Company ID</dt>
+            <dd className="font-mono text-slate-900">{company.id}</dd>
+          </div>
+          <div>
             <dt className="text-slate-500">Legal name</dt>
             <dd className="break-words text-slate-900">{company.legal_name}</dd>
           </div>

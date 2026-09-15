@@ -22,6 +22,8 @@ from apps.system_admin.api.serializers import (
     SystemAdminTokenRefreshSerializer,
 )
 from apps.system_admin.api.user_serializers import (
+    AdminUserCompanyChoiceSerializer,
+    AdminUserCreateSerializer,
     AdminUserDetailSerializer,
     AdminUserRoleAssignSerializer,
     AdminUserRoleSerializer,
@@ -36,6 +38,7 @@ from apps.system_admin.user_management import (
     USER_MANAGE_PERMISSION,
     UserManagementError,
     assign_tenant_role,
+    create_tenant_user,
     get_managed_user_or_404,
     managed_users_queryset,
     remove_tenant_role,
@@ -289,9 +292,12 @@ def user_snapshot(user):
 
 
 class AdminUserListView(AdminMethodPermissionAPIView):
-    """GET /api/admin/users/ — global list of ordinary tenant users."""
+    """GET/POST /api/admin/users/ — list or create tenant users."""
 
-    method_permissions = {"GET": USER_MANAGE_PERMISSION}
+    method_permissions = {
+        "GET": USER_MANAGE_PERMISSION,
+        "POST": USER_MANAGE_PERMISSION,
+    }
 
     def get(self, request):
         users = (
@@ -300,6 +306,42 @@ class AdminUserListView(AdminMethodPermissionAPIView):
             .order_by("id")
         )
         return Response(AdminUserSerializer(users, many=True).data)
+
+    def post(self, request):
+        serializer = AdminUserCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        meta = request_metadata(request)
+        try:
+            user = create_tenant_user(
+                company=data["company"],
+                email=data["email"],
+                password=data["password"],
+                first_name=data.get("first_name", ""),
+                last_name=data.get("last_name", ""),
+                role_ids=data.get("role_ids", []),
+                actor=request.user,
+                ip_address=meta["ip_address"],
+                user_agent=meta["user_agent"],
+            )
+        except UserManagementError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            AdminUserDetailSerializer(user).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class AdminUserCompanyChoiceView(AdminMethodPermissionAPIView):
+    """GET /api/admin/users/company-choices/ — safe creation choices."""
+
+    method_permissions = {"GET": USER_MANAGE_PERMISSION}
+
+    def get(self, request):
+        companies = Company.objects.filter(
+            is_platform=False, deleted_at__isnull=True
+        ).order_by("display_name", "id")
+        return Response(AdminUserCompanyChoiceSerializer(companies, many=True).data)
 
 
 class AdminUserDetailView(AdminMethodPermissionAPIView):

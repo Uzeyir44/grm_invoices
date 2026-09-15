@@ -179,6 +179,13 @@ The product admin remains `/api/admin/*`, protected by the explicit
 appropriate system permission. Refresh rotation is not enabled, so refresh
 token revocation remains a documented limitation.
 
+System Admins with `system.users.manage` can create ordinary tenant users with
+`POST /api/admin/users/`. The company and optional initial role are validated
+server-side and created atomically. Platform-company/System Admin accounts are
+excluded from this flow. Passwords are hashed immediately and never returned,
+logged, or included in audit payloads. Company and user IDs are administrative
+identifiers and are displayed by the React admin interface.
+
 MFA is not implemented. The existing `mfa_enabled` and
 `mfa_secret_encrypted` fields are retained, but there is no secret-encryption
 key management, TOTP verifier, recovery flow, or external MFA provider in this

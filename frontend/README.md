@@ -784,9 +784,16 @@ System Admin user API (`apps/system_admin/user_management.py` /
 | `POST /api/admin/users/:id/roles/` | assign a tenant role | `assignAdminUserRole(id, roleId)` |
 | `DELETE /api/admin/users/:id/roles/:roleId/` | remove a tenant role | `removeAdminUserRole(id, roleId)` |
 
-- **List** (`/admin/users`, `AdminUsersPage`) — loading, empty, and error/retry
+ - **List** (`/admin/users`, `AdminUsersPage`) — loading, empty, and error/retry
   states; a responsive table with user (name + email), company, active status,
-  and assigned roles. Real API data only (no fabricated counts).
+  user ID, company ID, and assigned roles. Real API data only (no fabricated
+  counts). The **New user** action opens `/admin/users/new`.
+- **Create** (`/admin/users/new`, `AdminUserCreatePage`) — creates an ordinary
+  tenant user through `POST /api/admin/users/`. The form selects from safe
+  tenant company/role choices, keeps the password in transient form state, and
+  never displays or stores it after submission. Creation and optional initial
+  tenant-role assignment are atomic on the backend and the response contains
+  no credentials.
 - **Detail** (`/admin/users/:userId`, `AdminUserDetailPage`) — identity,
   company, active status, timestamps, assigned tenant roles, an **Edit
   metadata** link, **Activate/Deactivate** (deactivate requires an inline

@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 
 import { listAdminUsers } from '../../api/adminUsers'
 import { PageContainer } from '../../components/ui/PageContainer'
+import { buttonClasses } from '../../components/ui/buttonClasses'
+import { useAdminAuth } from '../../contexts/admin-auth-context'
 import type { AdminUser } from '../../types/adminUser'
 
 function displayName(user: AdminUser): string {
@@ -20,6 +22,8 @@ function displayName(user: AdminUser): string {
  * only (no fabricated counts).
  */
 export function AdminUsersPage() {
+  const { hasPermission } = useAdminAuth()
+  const canManage = hasPermission('system.users.manage')
   const [users, setUsers] = useState<AdminUser[] | null>(null)
   const [error, setError] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -46,11 +50,18 @@ export function AdminUsersPage() {
   return (
     <PageContainer title="Users">
       <div className="space-y-4">
-        <p className="text-sm text-slate-500">
-          {users !== null && !error
-            ? `${users.length} ${users.length === 1 ? 'user' : 'users'}`
-            : null}
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-slate-500">
+            {users !== null && !error
+              ? `${users.length} ${users.length === 1 ? 'user' : 'users'}`
+              : null}
+          </p>
+          {canManage ? (
+            <Link to="/admin/users/new" className={buttonClasses('primary')}>
+              New user
+            </Link>
+          ) : null}
+        </div>
 
         {error ? (
           <div
@@ -90,6 +101,9 @@ export function AdminUsersPage() {
                 <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                   <tr>
                     <th scope="col" className="px-4 py-2 font-medium">
+                      ID
+                    </th>
+                    <th scope="col" className="px-4 py-2 font-medium">
                       User
                     </th>
                     <th scope="col" className="px-4 py-2 font-medium">
@@ -106,6 +120,9 @@ export function AdminUsersPage() {
                 <tbody className="divide-y divide-slate-100">
                   {users.map((user) => (
                     <tr key={user.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 font-mono text-xs text-slate-600">
+                        {user.id}
+                      </td>
                       <td className="px-4 py-3">
                         <Link
                           to={`/admin/users/${user.id}`}
@@ -116,7 +133,10 @@ export function AdminUsersPage() {
                         <p className="text-xs text-slate-500">{user.email}</p>
                       </td>
                       <td className="px-4 py-3 text-slate-600">
-                        {user.company_name}
+                        <span>{user.company_name}</span>
+                        <span className="ml-2 font-mono text-xs text-slate-500">
+                          #{user.company_id}
+                        </span>
                       </td>
                       <td className="px-4 py-3">
                         <span

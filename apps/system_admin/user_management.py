@@ -66,6 +66,59 @@ def validate_assignable_role(user, role):
 
 
 @transaction.atomic
+def create_tenant_user(
+    *,
+    company,
+    email,
+    password,
+    first_name="",
+    last_name="",
+    role_ids=None,
+    actor,
+    ip_address=None,
+    user_agent=None,
+    request_id=None,
+):
+    """Create an ordinary tenant user and optional company roles atomically."""
+    if company.is_platform or company.deleted_at is not None:
+        raise UserManagementError("Users can only be created for tenant companies.")
+
+    role_ids = list(role_ids or [])
+    roles = list(Role.objects.filter(id__in=role_ids))
+    if len(roles) != len(set(role_ids)):
+        raise UserManagementError("One or more selected roles do not exist.")
+
+    user = User.objects.create_user(
+        company=company,
+        email=email,
+        password=password,
+        first_name=first_name,
+        last_name=last_name,
+    )
+    for role in roles:
+        validate_assignable_role(user, role)
+        UserRole.objects.create(user=user, role=role)
+
+    create_platform_audit_log(
+        user=actor,
+        action="user.create",
+        entity_type="user",
+        entity_id=user.id,
+        target_company=company,
+        new_values={
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "role_ids": [role.id for role in roles],
+        },
+        ip_address=ip_address,
+        user_agent=user_agent,
+        request_id=request_id,
+    )
+    return user
+
+
+@transaction.atomic
 def assign_tenant_role(
     *,
     user,

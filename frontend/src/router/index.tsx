@@ -20,6 +20,7 @@ import { AdminRolesPage } from '../pages/admin/AdminRolesPage'
 import { AdminSettingsPage } from '../pages/admin/AdminSettingsPage'
 import { AdminUserDetailPage } from '../pages/admin/AdminUserDetailPage'
 import { AdminUserEditPage } from '../pages/admin/AdminUserEditPage'
+import { AdminUserCreatePage } from '../pages/admin/AdminUserCreatePage'
 import { AdminUsersPage } from '../pages/admin/AdminUsersPage'
 import { AuditLogsIndexPage } from '../pages/auditLogs/AuditLogsIndexPage'
 import { LoginPage } from '../pages/auth/LoginPage'
@@ -103,6 +104,7 @@ export function AppRouter() {
             element={<AdminCompanyEditPage />}
           />
           <Route path="users" element={<AdminUsersPage />} />
+          <Route path="users/new" element={<AdminUserCreatePage />} />
           <Route path="users/:userId" element={<AdminUserDetailPage />} />
           <Route path="users/:userId/edit" element={<AdminUserEditPage />} />
           <Route path="roles" element={<AdminRolesPage />} />

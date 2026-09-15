@@ -20,6 +20,7 @@ from apps.authentication.models import (
     Permission,
     Role,
     Scope,
+    User,
     UserRole,
 )
 from apps.authentication.rbac import is_system_admin
@@ -98,6 +99,9 @@ class UserManagementTestBase(APITestCase):
     def list_url(self):
         return reverse("admin-user-list")
 
+    def company_choices_url(self):
+        return reverse("admin-user-company-choices")
+
     def detail_url(self, user):
         return reverse("admin-user-detail", kwargs={"pk": user.id})
 
@@ -172,6 +176,19 @@ class UserManagementAuthorizationTests(UserManagementTestBase):
             status.HTTP_200_OK,
         )
 
+    def test_anonymous_cannot_create_user(self):
+        response = self.client.post(
+            self.list_url(), {"company_id": self.company_a.id}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_tenant_user_cannot_create_user(self):
+        self.client.force_authenticate(user=self.user_a)
+        response = self.client.post(
+            self.list_url(), {"company_id": self.company_a.id}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
 
 class UserListTests(UserManagementTestBase):
     def test_lists_users_across_companies(self):
@@ -208,6 +225,69 @@ class UserListTests(UserManagementTestBase):
         for row in rows:
             for forbidden in ("password", "mfa_secret_encrypted", "mfa_enabled"):
                 self.assertNotIn(forbidden, row)
+
+
+class UserCreationTests(UserManagementTestBase):
+    def create_payload(self, **overrides):
+        payload = {
+            "company_id": self.company_a.id,
+            "email": "new@a.example",
+            "first_name": "New",
+            "last_name": "User",
+            "password": "Str0ng-pass-123!",
+            "role_ids": [self.role_a.id],
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_authorized_admin_creates_tenant_user_and_audits(self):
+        self.authenticate_admin()
+        response = self.client.post(
+            self.list_url(), self.create_payload(), format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        user_id = response.json()["id"]
+        created = User.objects.get(pk=user_id)
+        self.assertEqual(created.company_id, self.company_a.id)
+        self.assertTrue(created.check_password("Str0ng-pass-123!"))
+        self.assertNotIn("password", response.json())
+        self.assertTrue(UserRole.objects.filter(user=created, role=self.role_a).exists())
+        audit = AuditLog.objects.get(action="user.create", entity_id=created.id)
+        self.assertEqual(audit.new_values["target_company_id"], self.company_a.id)
+        self.assertNotIn("password", str(audit.new_values).lower())
+
+    def test_creation_rejects_duplicate_email_in_company(self):
+        self.authenticate_admin()
+        response = self.client.post(
+            self.list_url(),
+            self.create_payload(email=self.user_a.email),
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("email", response.json())
+
+    def test_creation_rejects_platform_company(self):
+        self.authenticate_admin()
+        response = self.client.post(
+            self.list_url(), self.create_payload(company_id=self.platform.id), format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_creation_rejects_role_from_another_company(self):
+        self.authenticate_admin()
+        response = self.client.post(
+            self.list_url(), self.create_payload(role_ids=[self.role_b.id]), format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(User.objects.filter(email="new@a.example").exists())
+
+    def test_company_choices_exclude_platform_and_include_tenant_roles(self):
+        self.authenticate_admin()
+        response = self.client.get(self.company_choices_url())
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        choices = {row["id"]: row for row in response.json()}
+        self.assertNotIn(self.platform.id, choices)
+        self.assertEqual(choices[self.company_a.id]["roles"], [{"id": self.role_a.id, "name": "Manager A"}, {"id": self.role_a2.id, "name": "Viewer A"}])
 
 
 class UserDetailTests(UserManagementTestBase):

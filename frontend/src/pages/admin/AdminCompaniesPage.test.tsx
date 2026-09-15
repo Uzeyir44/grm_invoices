@@ -81,6 +81,8 @@ describe('AdminCompaniesPage', () => {
       '/admin/companies/5',
     )
     expect(screen.getByText('1234567890')).toBeInTheDocument()
+    expect(screen.getByText('5')).toBeInTheDocument()
+    expect(screen.getByText('6')).toBeInTheDocument()
     expect(screen.getByText('Beta LLC')).toBeInTheDocument()
     expect(screen.getAllByTestId('company-status')).toHaveLength(2)
     expect(screen.getByText('Platform')).toBeInTheDocument()

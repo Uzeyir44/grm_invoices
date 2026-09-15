@@ -37,6 +37,7 @@ from apps.system_admin.api.views import (
     AdminCompanyListView,
     AdminCompanyProvisionView,
     AdminUserActivateView,
+    AdminUserCompanyChoiceView,
     AdminUserDeactivateView,
     AdminUserDetailView,
     AdminUserListView,
@@ -94,6 +95,11 @@ urlpatterns = [
         "users/",
         AdminUserListView.as_view(),
         name="admin-user-list",
+    ),
+    path(
+        "users/company-choices/",
+        AdminUserCompanyChoiceView.as_view(),
+        name="admin-user-company-choices",
     ),
     path(
         "users/<int:pk>/",
