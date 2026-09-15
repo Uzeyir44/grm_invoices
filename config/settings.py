@@ -100,6 +100,38 @@ if IS_PRODUCTION and "*" in ALLOWED_HOSTS:
         "ALLOWED_HOSTS must not be '*' when DJANGO_ENV=production."
     )
 
+
+def env_bool(name, default=False):
+    value = str(env(name, str(default))).strip().lower()
+    if value not in {"true", "false", "1", "0", "yes", "no"}:
+        raise ImproperlyConfigured(f"{name} must be a boolean value.")
+    return value in {"true", "1", "yes"}
+
+
+# Django admin is internal/emergency tooling only. It is disabled by default in
+# production because the product administration surface is /api/admin/*.
+DJANGO_ADMIN_ENABLED = env_bool("DJANGO_ADMIN_ENABLED", default=not IS_PRODUCTION)
+
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in env("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+if IS_PRODUCTION and any(
+    not origin.startswith("https://") for origin in CSRF_TRUSTED_ORIGINS
+):
+    raise ImproperlyConfigured(
+        "DJANGO_CSRF_TRUSTED_ORIGINS must contain complete HTTPS origins in production."
+    )
+
+if IS_PRODUCTION:
+    jwt_signing_key = env("JWT_SIGNING_KEY", SECRET_KEY)
+    if len(jwt_signing_key) < 50 or jwt_signing_key.startswith("django-insecure-"):
+        raise ImproperlyConfigured(
+            "JWT_SIGNING_KEY must be a strong production secret of at least "
+            "50 characters, or be omitted to use DJANGO_SECRET_KEY."
+        )
+
 # Application definition
 
 INSTALLED_APPS = [
@@ -307,6 +339,8 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "auth_login": env("DRF_THROTTLE_AUTH_LOGIN", "10/min"),
         "auth_refresh": env("DRF_THROTTLE_TOKEN_REFRESH", "20/min"),
+        "admin_login": env("DRF_THROTTLE_ADMIN_LOGIN", "5/min"),
+        "admin_refresh": env("DRF_THROTTLE_ADMIN_REFRESH", "10/min"),
         "document_creation": env("DRF_THROTTLE_DOCUMENT_CREATION", "60/hour"),
         "document_generation": env("DRF_THROTTLE_DOCUMENT_GENERATION", "30/hour"),
         "pdf_generation": env("DRF_THROTTLE_PDF_GENERATION", "30/hour"),
@@ -358,6 +392,7 @@ if IS_PRODUCTION:
     SECURE_REFERRER_POLICY = "same-origin"
     SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
     CSRF_COOKIE_SECURE = True
     # HSTS for one year; also a prerequisite for HSTS preload submission.
     SECURE_HSTS_SECONDS = 31536000

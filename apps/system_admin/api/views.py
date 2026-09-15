@@ -54,14 +54,14 @@ class SystemAdminTokenObtainView(TokenViewBase):
     """
 
     serializer_class = SystemAdminTokenObtainSerializer
-    throttle_scope = "auth_login"
+    throttle_scope = "admin_login"
 
 
 class SystemAdminTokenRefreshView(TokenViewBase):
     """POST /api/admin/authentication/token/refresh/  {refresh}"""
 
     serializer_class = SystemAdminTokenRefreshSerializer
-    throttle_scope = "auth_refresh"
+    throttle_scope = "admin_refresh"
 
 
 class SystemAdminMeView(APIView):

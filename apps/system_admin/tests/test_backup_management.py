@@ -241,6 +241,30 @@ class BackupCapabilityTests(BackupManagementTestBase):
             body = self.client.get(self.capability_url()).json()
         self.assertFalse(body["media"]["available"])
 
+    def test_backup_root_overlapping_media_root_fails_safely(self):
+        self.authenticate_admin()
+        with override_settings(
+            BACKUP_ROOT=str(self.media_root / "backups"),
+            MEDIA_ROOT=str(self.media_root),
+        ):
+            response = self.client.post(
+                self.list_url(), {"backup_type": "media"}, format="json"
+            )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.json()["status"], Backup.Status.FAILED)
+        self.assertIn("overlap", response.json()["error_message"])
+
+    def test_backup_root_failure_does_not_expose_filesystem_path(self):
+        self.authenticate_admin()
+        with override_settings(
+            BACKUP_ROOT=str(self.media_root / "backups"),
+            MEDIA_ROOT=str(self.media_root),
+        ):
+            response = self.client.post(
+                self.list_url(), {"backup_type": "media"}, format="json"
+            )
+        self.assertNotIn(str(self.media_root), response.content.decode())
+
 
 class BackupCreateDatabaseTests(BackupManagementTestBase):
     def test_create_database_backup_produces_real_artifact(self):

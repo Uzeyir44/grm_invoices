@@ -21,11 +21,18 @@ from apps.system_admin.services import PlatformConfigurationError, get_platform_
 GENERIC_AUTH_ERROR = "No active account found with the given credentials"
 
 
-def platform_account_is_usable(user):
+def platform_account_is_usable(user, platform_company=None):
     """A usable System Admin: active, not deleted, and holding a system role."""
     if user is None:
         return False
     if not user.is_active or user.deleted_at is not None:
+        return False
+    if platform_company is not None and user.company_id != platform_company.id:
+        return False
+    # MFA fields exist for a future implementation, but no verifier or secret
+    # encryption service exists yet. Fail closed rather than issuing a token
+    # for an account marked as MFA-enabled without completing MFA.
+    if user.mfa_enabled:
         return False
     return is_system_admin(user)
 
@@ -50,7 +57,7 @@ class SystemAdminTokenObtainSerializer(serializers.Serializer):
             email=attrs["email"],
             password=attrs["password"],
         )
-        if not platform_account_is_usable(user):
+        if not platform_account_is_usable(user, company):
             raise AuthenticationFailed(GENERIC_AUTH_ERROR, "no_active_account")
 
         refresh = RefreshToken.for_user(user)
@@ -86,7 +93,11 @@ class SystemAdminTokenRefreshSerializer(serializers.Serializer):
 
         user_id = refresh.get(api_settings.USER_ID_CLAIM)
         user = User.objects.filter(pk=user_id).first() if user_id is not None else None
-        if not platform_account_is_usable(user):
+        try:
+            platform_company = get_platform_company()
+        except PlatformConfigurationError:
+            raise AuthenticationFailed(GENERIC_AUTH_ERROR, "no_active_account")
+        if not platform_account_is_usable(user, platform_company):
             raise AuthenticationFailed(GENERIC_AUTH_ERROR, "no_active_account")
 
         access = refresh.access_token

@@ -62,6 +62,8 @@ _PROBE = textwrap.dedent(
                 "SECURE_PROXY_SSL_HEADER": getattr(
                     settings, "SECURE_PROXY_SSL_HEADER", None
                 ),
+                "DJANGO_ADMIN_ENABLED": settings.DJANGO_ADMIN_ENABLED,
+                "CSRF_TRUSTED_ORIGINS": list(settings.CSRF_TRUSTED_ORIGINS),
             }
         )
     )
@@ -170,6 +172,35 @@ class ProductionSettingsTests(SimpleTestCase):
             payload["SECURE_PROXY_SSL_HEADER"],
             ["HTTP_X_FORWARDED_PROTO", "https"],
         )
+
+    def test_production_disables_django_admin_by_default(self):
+        payload = _probe(_prod())
+        self.assertFalse(payload["DJANGO_ADMIN_ENABLED"])
+
+    def test_production_allows_explicit_admin_enablement_and_csrf_origins(self):
+        payload = _probe(
+            {
+                **_prod(),
+                "DJANGO_ADMIN_ENABLED": "True",
+                "DJANGO_CSRF_TRUSTED_ORIGINS": "https://frontend.example",
+            }
+        )
+        self.assertTrue(payload["DJANGO_ADMIN_ENABLED"])
+        self.assertEqual(payload["CSRF_TRUSTED_ORIGINS"], ["https://frontend.example"])
+
+    def test_production_rejects_malformed_csrf_origin(self):
+        payload = _probe(
+            {**_prod(), "DJANGO_CSRF_TRUSTED_ORIGINS": "frontend.example"}
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("DJANGO_CSRF_TRUSTED_ORIGINS", payload["error"])
+
+    def test_production_rejects_http_csrf_origin(self):
+        payload = _probe(
+            {**_prod(), "DJANGO_CSRF_TRUSTED_ORIGINS": "http://frontend.example"}
+        )
+        self.assertFalse(payload["ok"])
+        self.assertIn("HTTPS", payload["error"])
 
 
 class DevelopmentSettingsTests(SimpleTestCase):

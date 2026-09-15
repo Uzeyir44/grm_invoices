@@ -29,6 +29,7 @@ from apps.system_admin.api.views import AdminMethodPermissionAPIView
 from apps.system_admin.audit import create_platform_audit_log
 from apps.system_admin.backup_services import (
     BackupCapabilityError,
+    BackupConfigurationError,
     BackupDeleteError,
     BackupInProgressError,
     backup_artifact_path,
@@ -95,6 +96,10 @@ class AdminBackupListView(AdminMethodPermissionAPIView):
         except BackupInProgressError as exc:
             return Response(
                 {"detail": str(exc)}, status=status.HTTP_409_CONFLICT
+            )
+        except BackupConfigurationError as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
             )
 
         create_platform_audit_log(
@@ -187,6 +192,11 @@ class AdminBackupDetailView(AdminMethodPermissionAPIView):
                 {"detail": str(exc)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+        except BackupConfigurationError:
+            return Response(
+                {"detail": "Backup storage is not safely configured."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         create_platform_audit_log(
             user=request.user,
@@ -221,7 +231,13 @@ class AdminBackupDownloadView(AdminMethodPermissionAPIView):
                 {"detail": "Only completed backups can be downloaded."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        path = backup_artifact_path(backup)
+        try:
+            path = backup_artifact_path(backup)
+        except BackupConfigurationError:
+            return Response(
+                {"detail": "Backup storage is not safely configured."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         if path is None or not path.is_file():
             return Response(
                 {"detail": "The backup artifact does not exist."},
@@ -262,7 +278,13 @@ class AdminBackupVerifyView(AdminMethodPermissionAPIView):
 
     def post(self, request, pk):
         backup = get_backup_or_404(pk)
-        result = verify_backup(backup)
+        try:
+            result = verify_backup(backup)
+        except BackupConfigurationError:
+            return Response(
+                {"detail": "Backup storage is not safely configured."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         meta = request_metadata(request)
         create_platform_audit_log(
             user=request.user,

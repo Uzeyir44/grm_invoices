@@ -681,6 +681,24 @@ frontend only mirrors this for UX.
 - Admin logout clears only the Admin session; company logout likewise never
   touches the Admin session.
 
+### Admin security limitations
+
+- The backend is the security boundary. Route guards, permission-aware
+  navigation, and frontend token separation are UX and session-management
+  controls only.
+- Admin access and refresh tokens are stored separately from company tokens in
+  namespaced `localStorage` keys. This prevents the two clients from confusing
+  token families, but `localStorage` remains readable by JavaScript; production
+  deployments must maintain strong XSS protections and HTTPS.
+- Admin login and refresh are independently throttled by the backend. A shared
+  Django cache is required for consistent throttling across multiple workers.
+- MFA is intentionally not exposed in this UI. The backend has MFA-related
+  fields but no complete encrypted-secret, enrollment, verification, recovery,
+  or provider implementation. An account marked MFA-enabled is rejected by the
+  admin token endpoint rather than receiving a partially authenticated session.
+- Passwords, MFA secrets, JWTs, refresh tokens, and authorization headers are
+  never rendered into the UI or included in frontend environment variables.
+
 ### Admin layout and permission-aware navigation
 
 `AdminShell` (`src/components/layout/AdminShell.tsx`) provides the responsive

@@ -153,6 +153,50 @@ Django's cache — multi-worker production deployments should use a shared cache
 backend (e.g. Redis) so throttling is consistent across workers; the local
 memory cache is sufficient for single-process development.
 
+System Admin authentication uses separate limits: `admin_login` defaults to
+`5/min` and `admin_refresh` defaults to `10/min`. These are configurable with
+`DRF_THROTTLE_ADMIN_LOGIN` and `DRF_THROTTLE_ADMIN_REFRESH`. Production
+multi-worker deployments need a shared Django cache; this repository does not
+add Redis, Celery, or another distributed service.
+
+### Production hardening
+
+`DJANGO_ENV=production` fails closed on missing or weak Django/JWT secrets,
+debug mode, wildcard/missing allowed hosts, malformed CSRF origins, and unsafe
+production settings. HTTPS, secure session/CSRF cookies, HSTS, content
+sniffing protection, clickjacking protection, and a restrictive referrer policy
+are enabled in production. Set `DJANGO_TRUST_PROXY_SSL_HEADER=True` only when a
+trusted TLS-terminating proxy overwrites `X-Forwarded-Proto`.
+
+The Django `/admin/` site is internal/emergency tooling, not the product System
+Admin interface. It is enabled by default in development and disabled by
+default in production; set `DJANGO_ADMIN_ENABLED=True` only when the deployment
+also restricts it at the network layer. The custom User model intentionally has
+no `is_staff`/`is_superuser` or Django admin permission system.
+
+The product admin remains `/api/admin/*`, protected by the explicit
+`scope=system_admin` token claim, the actual system-scoped RBAC role, and the
+appropriate system permission. Refresh rotation is not enabled, so refresh
+token revocation remains a documented limitation.
+
+MFA is not implemented. The existing `mfa_enabled` and
+`mfa_secret_encrypted` fields are retained, but there is no secret-encryption
+key management, TOTP verifier, recovery flow, or external MFA provider in this
+repository. A System Admin marked `mfa_enabled` fails closed and cannot receive
+a token until a complete MFA implementation is added. MFA secrets are never
+returned, logged, or placed in JWTs.
+
+CORS middleware is not installed. Local development uses the Vite same-origin
+`/api` proxy, and production should preferably use the same-origin reverse
+proxy arrangement. A separate frontend origin requires an explicit HTTPS CORS
+allowlist and credential policy at deployment time; wildcard credentialed CORS
+is not supported.
+
+Backups remain application-triggered and local. `BACKUP_ROOT` must not overlap
+`MEDIA_ROOT`, must not be web-served, and should use restricted filesystem
+permissions. Off-machine copies, encryption at rest, scheduling, retention,
+restore, and disaster-recovery testing remain deployment requirements.
+
 ## Requirements
 
 - Python 3.13+

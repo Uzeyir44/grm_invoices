@@ -16,6 +16,8 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework.throttling import SimpleRateThrottle
+from unittest import mock
 
 from apps.authentication.models import Permission, Role, UserRole
 from apps.authentication.tests.test_authentication import make_company, make_user
@@ -120,6 +122,18 @@ class SystemAdminBoundaryTests(APITestCase):
         self.assertEqual(access["scope"], SYSTEM_ADMIN_SCOPE)
         self.assertEqual(access["company_id"], self.platform.id)
 
+    def test_admin_login_has_a_separate_throttle_scope(self):
+        with mock.patch.object(
+            SimpleRateThrottle,
+            "THROTTLE_RATES",
+            {"admin_login": "1/min"},
+        ):
+            self.assertEqual(self.obtain_admin_tokens().status_code, status.HTTP_200_OK)
+            self.assertEqual(
+                self.obtain_admin_tokens().status_code,
+                status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
     def test_admin_token_missing_scope_claim_is_rejected(self):
         # A hand-built token for the admin user that lacks the platform claim
         # must not pass the boundary.
@@ -204,6 +218,14 @@ class SystemAdminBoundaryTests(APITestCase):
         self.admin.save(update_fields=["is_active"])
         self.assertEqual(
             self.obtain_admin_tokens().status_code, status.HTTP_401_UNAUTHORIZED
+        )
+
+    def test_mfa_marked_system_admin_fails_closed_until_mfa_exists(self):
+        self.admin.mfa_enabled = True
+        self.admin.save(update_fields=["mfa_enabled"])
+        self.assertEqual(
+            self.obtain_admin_tokens().status_code,
+            status.HTTP_401_UNAUTHORIZED,
         )
 
     def test_soft_deleted_system_admin_cannot_obtain_token(self):

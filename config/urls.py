@@ -6,9 +6,12 @@ Business application URLs will be included here (e.g.
 """
 
 from django.contrib import admin
+from django.conf import settings
 from django.urls import include, path
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
     path("api/", include("config.api_urls")),
 ]
+
+if settings.DJANGO_ADMIN_ENABLED:
+    urlpatterns.insert(0, path("admin/", admin.site.urls))

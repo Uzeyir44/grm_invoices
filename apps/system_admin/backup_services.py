@@ -58,6 +58,10 @@ class BackupCapabilityError(BackupServiceError):
     """The requested backup type is not available on this server."""
 
 
+class BackupConfigurationError(BackupServiceError):
+    """Backup storage configuration is unsafe or unusable."""
+
+
 class BackupInProgressError(BackupServiceError):
     """A backup is already pending/running; concurrent creation is refused."""
 
@@ -78,6 +82,17 @@ class BackupDeleteError(BackupServiceError):
 def get_backup_storage_root():
     """Return the (created) artifact directory, never web-served."""
     root = Path(settings.BACKUP_ROOT)
+    media_root = Path(settings.MEDIA_ROOT)
+    resolved_root = root.resolve()
+    resolved_media = media_root.resolve()
+    if (
+        resolved_root == resolved_media
+        or resolved_root in resolved_media.parents
+        or resolved_media in resolved_root.parents
+    ):
+        raise BackupConfigurationError(
+            "Backup storage must not overlap the media storage directory."
+        )
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -318,7 +333,13 @@ def run_backup(backup):
     size and SHA-256 recorded; any execution failure yields ``failed`` with a
     generic ``error_message`` and the partial artifact removed.
     """
-    storage_root = get_backup_storage_root()
+    try:
+        storage_root = get_backup_storage_root()
+    except BackupConfigurationError as exc:
+        backup.status = Backup.Status.FAILED
+        backup.error_message = str(exc)
+        backup.save(update_fields=["status", "error_message", "updated_at"])
+        return backup
     dest = storage_root / _generate_filename(backup.backup_type)
     try:
         if backup.backup_type == Backup.Type.DATABASE:
@@ -341,10 +362,14 @@ def run_backup(backup):
             "error_message",
             "updated_at",
         ])
-    except BackupExecutionError as exc:
+    except (BackupExecutionError, OSError) as exc:
         _remove_artifact(dest)
         backup.status = Backup.Status.FAILED
-        backup.error_message = str(exc)
+        backup.error_message = (
+            str(exc)
+            if isinstance(exc, BackupExecutionError)
+            else "The backup artifact could not be created."
+        )
         backup.save(update_fields=["status", "error_message", "updated_at"])
 
     return backup

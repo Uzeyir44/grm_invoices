@@ -48,6 +48,19 @@ describe('Admin routing', () => {
       ) {
         return Promise.resolve(jsonResponse(200, []))
       }
+      if (url.includes('/admin/backups/capability/')) {
+        return Promise.resolve(
+          jsonResponse(200, {
+            database: { available: true, reason: 'available' },
+            media: { available: true, reason: 'available' },
+          }),
+        )
+      }
+      if (url.includes('/admin/backups/')) {
+        return Promise.resolve(
+          jsonResponse(200, { count: 0, next: null, previous: null, results: [] }),
+        )
+      }
       return Promise.resolve(jsonResponse(200, adminMe(overrides)))
     })
   }
